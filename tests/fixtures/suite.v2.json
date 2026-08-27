@@ -1,0 +1,4 @@
+[
+  { "id": "US.TEST-01", "provider": "Fixture", "country": "US", "host": "one.example.net" },
+  { "id": "DE.TEST-02", "provider": "Fixture", "country": "DE", "host": "two.example.net" }
+]

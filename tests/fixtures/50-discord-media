@@ -1,0 +1,3 @@
+# fixture matching the upstream hook identity; never installed or executed
+DISCORD_MEDIA_PORT_RANGE="50000-50099,19294-19344"
+NFQWS_OPT_DESYNC_DISCORD_MEDIA="--dpi-desync=fake --dpi-desync-repeats=2"

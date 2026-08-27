@@ -1,0 +1,2 @@
+# Canary control: queue the connection but do not perform desynchronization.
+--filter-tcp=443

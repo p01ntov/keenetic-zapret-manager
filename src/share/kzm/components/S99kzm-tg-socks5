@@ -1,0 +1,20 @@
+#!/bin/sh
+
+KZM_COMPONENT=socks5
+export KZM_COMPONENT
+
+KZM_PREFIX="${KZM_PREFIX:-/opt}"
+KZM_BASE="${KZM_ROOT:-}${KZM_PREFIX}"
+KZM_ACTION=${1:-}
+case "$KZM_ACTION" in
+    start|restart)
+        [ -f "$KZM_BASE/etc/kzapret-manager/components/$KZM_COMPONENT.autostart" ] || exit 0
+        ;;
+    kill) KZM_ACTION=stop ;;
+    check) KZM_ACTION=status ;;
+    reconfigure)
+        [ -f "$KZM_BASE/etc/kzapret-manager/components/$KZM_COMPONENT.autostart" ] || exit 0
+        KZM_ACTION=restart
+        ;;
+esac
+exec "$KZM_BASE/libexec/kzm/tg-proxy-service.sh" "$KZM_ACTION"

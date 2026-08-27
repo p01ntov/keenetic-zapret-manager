@@ -1,0 +1,3351 @@
+#!/bin/sh
+
+set -u
+
+KZM_VERSION="0.8.0"
+KZM_ROOT="${KZM_ROOT:-}"
+KZM_PREFIX="${KZM_PREFIX:-/opt}"
+KZM_BASE="${KZM_ROOT}${KZM_PREFIX}"
+KZM_ETC="${KZM_ETC:-$KZM_BASE/etc/kzapret-manager}"
+KZM_SHARE="${KZM_SHARE:-$KZM_BASE/share/kzm}"
+KZM_LIBEXEC="${KZM_LIBEXEC:-$KZM_BASE/libexec/kzm}"
+KZM_CONFIG="${KZM_CONFIG:-$KZM_ETC/kzm.conf}"
+KZM_TMP=""
+KZM_TMP_BASE=""
+
+NFQWS_DIR="${NFQWS_DIR:-$KZM_BASE/etc/nfqws}"
+NFQWS_CONFIG="${NFQWS_CONFIG:-$NFQWS_DIR/nfqws.conf}"
+NFQWS_INIT="${NFQWS_INIT:-$KZM_BASE/etc/init.d/S51nfqws}"
+NFQWS_BIN="${NFQWS_BIN:-$KZM_BASE/usr/bin/nfqws}"
+NFQWS2_INIT="${NFQWS2_INIT:-$KZM_BASE/etc/init.d/S51nfqws2}"
+
+STATE_FILE="$KZM_ETC/state.conf"
+CATALOG_DIR="$KZM_ETC/strategies"
+GENERAL_DIR="$CATALOG_DIR/general"
+FLOWSEAL_DIR="$CATALOG_DIR/flowseal"
+YOUTUBE_DIR="$CATALOG_DIR/youtube"
+EXTRAS_DIR="$CATALOG_DIR/extras"
+DISCORD_DIR="$CATALOG_DIR/discord"
+DISCORD_SCRIPT_DIR="$CATALOG_DIR/discord-scripts"
+CUSTOM_DIR="$CATALOG_DIR/custom"
+LIST_DIR="$KZM_ETC/lists"
+FAKE_DIR="$KZM_ETC/fake"
+BACKUP_DIR="$KZM_ETC/backups"
+TOOLS_DIR="$KZM_ETC/tools"
+RESULT_DIR="$KZM_ETC/results"
+ACTIVE_STRATEGY="$KZM_ETC/active.strategy"
+CONFIGURED_STATE="$KZM_ETC/configured-state.conf"
+RUNNING_STATE="$KZM_ETC/running-state.conf"
+LAST_TEST_RESULT="$RESULT_DIR/last-strategy-test.csv"
+LAST_TEST_META="$RESULT_DIR/last-strategy-test.meta"
+USER_LIST="$LIST_DIR/user.list"
+USER_IPSET="$LIST_DIR/user-ipset.list"
+AUTO_LIST="$LIST_DIR/auto.list"
+YOUTUBE_LIST="$LIST_DIR/youtube.list"
+EXCLUDE_LIST="$LIST_DIR/exclude.list"
+TEST_TARGETS="$LIST_DIR/test-targets.tsv"
+
+GENERAL_URL="https://raw.githubusercontent.com/StressOzz/Zapret-Manager/main/Strategies.md"
+YOUTUBE_URL="https://raw.githubusercontent.com/StressOzz/Zapret-Manager/main/files/StrYoutube"
+DISCORD_URL="https://raw.githubusercontent.com/StressOzz/Zapret-Manager/main/Zapret-Manager.sh"
+DISCORD_STUN4ALL_URL="https://raw.githubusercontent.com/bol-van/zapret/master/init.d/custom.d.examples.linux/50-stun4all"
+DISCORD_QUIC4ALL_URL="https://raw.githubusercontent.com/bol-van/zapret/master/init.d/custom.d.examples.linux/50-quic4all"
+DISCORD_MEDIA_SCRIPT_URL="https://raw.githubusercontent.com/bol-van/zapret/master/init.d/custom.d.examples.linux/50-discord-media"
+DISCORD_LEGACY_SCRIPT_URL="https://raw.githubusercontent.com/bol-van/zapret/v70.5/init.d/custom.d.examples.linux/50-discord"
+EXCLUDE_URL="https://raw.githubusercontent.com/StressOzz/Zapret-Manager/main/zapret-hosts-user-exclude.txt"
+FLOWSEAL_ZIP_URL="https://github.com/Flowseal/zapret-discord-youtube/archive/refs/heads/main.zip"
+TEST_SUITE_V2_URL="https://raw.githubusercontent.com/hyperion-cs/dpi-checkers/main/ru/tcp-16-20/suite.v2.json"
+BOLVAN_FAKE_BASE_URL="https://raw.githubusercontent.com/bol-van/zapret/master/files/fake"
+FLOWSEAL_FAKE_BASE_URL="https://raw.githubusercontent.com/Flowseal/zapret-discord-youtube/main/bin"
+CANARY_FEED_URL="https://nfqws.github.io/nfqws-keenetic/aarch64"
+CANARY_QUEUE_NUM=301
+MIN_FULL_TEST_TARGETS=50
+KZM_CANARY_BIN="$TOOLS_DIR/nfqws"
+MIHOMO_LOG="${MIHOMO_LOG:-$KZM_BASE/var/log/mihomo.log}"
+BACKUP_KEEP=10
+RECOMMENDED_GENERAL_PROFILE=v7
+RECOMMENDED_YOUTUBE_PROFILE=Yv08
+RECOMMENDED_DISCORD_MEDIA_PROFILE=Dv1
+
+if [ -r "$KZM_CONFIG" ]; then
+    # shellcheck disable=SC1090
+    . "$KZM_CONFIG"
+fi
+
+case "$MIN_FULL_TEST_TARGETS" in
+    ''|*[!0-9]*) MIN_FULL_TEST_TARGETS=50 ;;
+esac
+if [ "$MIN_FULL_TEST_TARGETS" -lt 23 ] 2>/dev/null; then
+    MIN_FULL_TEST_TARGETS=23
+fi
+
+GENERAL_PROFILE=v7
+YOUTUBE_PROFILE=Yv08
+DISCORD_ENABLED=0
+DISCORD_MEDIA_PROFILE=Dv1
+DISCORD_SCRIPT=off
+DISCORD_FAKE=stun.bin
+QUIC_ENABLED=0
+GAME_ENABLED=0
+TRAFFIC_SCOPE=all
+
+if [ -r "$STATE_FILE" ]; then
+    # shellcheck disable=SC1090
+    . "$STATE_FILE"
+fi
+
+say() {
+    printf '%s\n' "$*"
+}
+
+warn() {
+    printf 'Внимание: %s\n' "$*" >&2
+}
+
+die() {
+    printf 'Ошибка: %s\n' "$*" >&2
+    exit 1
+}
+
+cleanup_tmp() {
+    if [ -n "$KZM_TMP" ]; then
+        case "$KZM_TMP" in
+            "$KZM_TMP_BASE"/kzm.*)
+                rm -rf "$KZM_TMP"
+                ;;
+        esac
+    fi
+    KZM_TMP=""
+}
+
+select_tmp_base() {
+    if [ -n "$KZM_ROOT" ]; then
+        KZM_TMP_BASE="$KZM_ROOT/tmp"
+        mkdir -p "$KZM_TMP_BASE" || die "не удалось создать тестовый временный каталог"
+    else
+        # Ignore Entware TMPDIR=/opt/tmp: downloads and generated archives must
+        # live on tmpfs, not accumulate on flash storage.
+        KZM_TMP_BASE=/tmp
+    fi
+}
+
+make_tmp() {
+    if [ -n "$KZM_TMP" ]; then
+        cleanup_tmp
+    fi
+    select_tmp_base
+    KZM_TMP=$(mktemp -d "$KZM_TMP_BASE/kzm.XXXXXX") || die "не удалось создать временный каталог"
+    trap cleanup_tmp 0
+    trap 'exit 129' HUP
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+}
+
+ensure_layout() {
+    mkdir -p "$GENERAL_DIR" "$FLOWSEAL_DIR" "$YOUTUBE_DIR" "$EXTRAS_DIR" "$DISCORD_DIR" "$DISCORD_SCRIPT_DIR" "$CUSTOM_DIR" "$LIST_DIR" "$FAKE_DIR" "$BACKUP_DIR" "$TOOLS_DIR" "$RESULT_DIR" || die "не удалось создать каталоги менеджера"
+    if [ ! -f "$STATE_FILE" ]; then
+        if [ -r "$KZM_SHARE/state.default" ]; then
+            cp "$KZM_SHARE/state.default" "$STATE_FILE" || die "не удалось создать state.conf"
+        else
+            write_state_file
+        fi
+    fi
+    if [ ! -f "$YOUTUBE_LIST" ] && [ -r "$KZM_SHARE/youtube.list" ]; then
+        cp "$KZM_SHARE/youtube.list" "$YOUTUBE_LIST" || die "не удалось создать youtube.list"
+    fi
+    [ -f "$USER_LIST" ] || : > "$USER_LIST"
+    [ -f "$USER_IPSET" ] || : > "$USER_IPSET"
+    [ -f "$AUTO_LIST" ] || : > "$AUTO_LIST"
+    [ -f "$EXCLUDE_LIST" ] || : > "$EXCLUDE_LIST"
+    if [ ! -f "$TEST_TARGETS" ] && [ -r "$KZM_SHARE/test-targets.base.tsv" ]; then
+        cp "$KZM_SHARE/test-targets.base.tsv" "$TEST_TARGETS" || die "не удалось создать базовый список тестов"
+    fi
+}
+
+write_state_file() {
+    state_tmp="$STATE_FILE.tmp.$$"
+    {
+        printf 'GENERAL_PROFILE=%s\n' "$GENERAL_PROFILE"
+        printf 'YOUTUBE_PROFILE=%s\n' "$YOUTUBE_PROFILE"
+        printf 'DISCORD_ENABLED=%s\n' "$DISCORD_ENABLED"
+        printf 'DISCORD_MEDIA_PROFILE=%s\n' "$DISCORD_MEDIA_PROFILE"
+        printf 'DISCORD_SCRIPT=%s\n' "$DISCORD_SCRIPT"
+        printf 'DISCORD_FAKE=%s\n' "$DISCORD_FAKE"
+        printf 'QUIC_ENABLED=%s\n' "$QUIC_ENABLED"
+        printf 'GAME_ENABLED=%s\n' "$GAME_ENABLED"
+        printf 'TRAFFIC_SCOPE=%s\n' "$TRAFFIC_SCOPE"
+    } > "$state_tmp" || die "не удалось записать state.conf"
+    chmod 600 "$state_tmp" 2>/dev/null || true
+    mv "$state_tmp" "$STATE_FILE" || die "не удалось применить state.conf"
+}
+
+validate_state() {
+    case "$GENERAL_PROFILE" in
+        v[0-9]*|flow:*|custom:*) ;;
+        *) die "некорректный GENERAL_PROFILE в state.conf" ;;
+    esac
+    case "$YOUTUBE_PROFILE" in
+        off|Yv[0-9]*) ;;
+        *) die "некорректный YOUTUBE_PROFILE в state.conf" ;;
+    esac
+    case "$DISCORD_MEDIA_PROFILE" in
+        off|Dv[0-9]*) ;;
+        *) die "некорректный DISCORD_MEDIA_PROFILE в state.conf" ;;
+    esac
+    case "$DISCORD_SCRIPT" in
+        off|50-discord-media) ;;
+        50-stun4all|50-quic4all|50-discord) die "$DISCORD_SCRIPT недоступен в безопасном режиме Keenetic" ;;
+        *) die "некорректный DISCORD_SCRIPT в state.conf" ;;
+    esac
+    case "$DISCORD_FAKE" in
+        off|stun.bin|stun2.bin|quic_initial_4pda_to.bin|quic_initial_tencent_com.bin|tls_clienthello_sochi_park.bin|quic_initial_www_google_com.bin|quic_initial_steamcommunity_com.bin|quic_initial_5ka_ru.bin|quic_initial_rutube_ru.bin) ;;
+        *) die "некорректный DISCORD_FAKE в state.conf" ;;
+    esac
+    case "$DISCORD_ENABLED:$QUIC_ENABLED:$GAME_ENABLED" in
+        [01]:[01]:[01]) ;;
+        *) die "флаги Discord/QUIC/Game должны быть 0 или 1" ;;
+    esac
+    case "$TRAFFIC_SCOPE" in
+        all|list|auto) ;;
+        *) die "TRAFFIC_SCOPE должен быть all, list или auto" ;;
+    esac
+}
+
+fetch_url() {
+    fetch_source=$1
+    fetch_target=$2
+    case "$fetch_source" in
+        file://*)
+            cp "${fetch_source#file://}" "$fetch_target"
+            return $?
+            ;;
+    esac
+    if [ -f "$fetch_source" ]; then
+        cp "$fetch_source" "$fetch_target"
+    elif command -v curl >/dev/null 2>&1; then
+        curl -fsSL --connect-timeout 30 "$fetch_source" -o "$fetch_target"
+    elif command -v wget >/dev/null 2>&1; then
+        wget -q -T 30 -O "$fetch_target" "$fetch_source"
+    else
+        die "нужен wget или curl"
+    fi
+}
+
+validate_strategy() {
+    validate_file=$1
+    awk '
+        /^[[:space:]]*$/ || /^#/ { next }
+        $0 !~ /^--/ { print "строка не начинается с --: " $0 > "/dev/stderr"; bad=1; next }
+        $0 ~ /[^A-Za-z0-9_.:,+=\/@!%~ -]/ { print "запрещённый символ: " $0 > "/dev/stderr"; bad=1 }
+        {
+            option=$0
+            sub(/[=[:space:]].*/, "", option)
+            if (option != "--new" &&
+                option !~ /^--filter-(tcp|udp|l3|l7)$/ &&
+                option !~ /^--hostlist(-domains|-exclude|-exclude-domains|-auto)?$/ &&
+                option !~ /^--ipset(-exclude)?(-ip)?$/ &&
+                option != "--ip-id" &&
+                option !~ /^--dpi-desync([A-Za-z0-9_-]*)$/ &&
+                option !~ /^--dup([A-Za-z0-9_-]*)$/) {
+                print "неразрешённая управляющая опция: " option > "/dev/stderr"
+                bad=1
+            }
+        }
+        END { exit bad ? 1 : 0 }
+    ' "$validate_file"
+}
+
+count_profiles() {
+    count_dir=$1
+    find "$count_dir" -type f -name '*.strategy' 2>/dev/null | awk 'END { print NR + 0 }'
+}
+
+update_exclude_list() {
+    exclude_tmp=$1
+    if ! fetch_url "$EXCLUDE_URL" "$exclude_tmp"; then
+        warn "список исключений не скачан; прежний файл сохранён"
+        return 1
+    fi
+    awk '
+        { sub(/\r$/, "") }
+        /^[[:space:]]*$/ { next }
+        /^#/ { print; next }
+        $0 ~ /[[:space:]\047\042`$;&|<>\\]/ { next }
+        { print }
+    ' "$exclude_tmp" > "$exclude_tmp.clean"
+    [ -s "$exclude_tmp.clean" ] || return 1
+    cp "$exclude_tmp.clean" "$EXCLUDE_LIST.next.$$" || return 1
+    mv "$EXCLUDE_LIST.next.$$" "$EXCLUDE_LIST"
+}
+
+replace_catalog_dir() {
+    replace_source=$1
+    replace_target=$2
+    replace_name=$3
+    replace_next="$CATALOG_DIR/.$replace_name.next.$$"
+    replace_old="$CATALOG_DIR/.$replace_name.old.$$"
+
+    case "$replace_next:$replace_old:$replace_target" in
+        "$CATALOG_DIR"/.*:"$CATALOG_DIR"/.*:"$CATALOG_DIR"/*) ;;
+        *) die "отказ от замены неожиданного пути каталога" ;;
+    esac
+    rm -rf "$replace_next" "$replace_old"
+    mkdir -p "$replace_next" || die "не удалось подготовить каталог $replace_name"
+    cp -R "$replace_source"/. "$replace_next"/ || die "не удалось скопировать каталог $replace_name"
+    if [ -d "$replace_target" ]; then
+        mv "$replace_target" "$replace_old" || die "не удалось зарезервировать каталог $replace_name"
+    fi
+    if mv "$replace_next" "$replace_target"; then
+        rm -rf "$replace_old"
+    else
+        [ -d "$replace_old" ] && mv "$replace_old" "$replace_target"
+        die "не удалось атомарно заменить каталог $replace_name"
+    fi
+}
+
+validate_test_targets() {
+    minimum_targets=${2:-23}
+    awk -F'|' -v minimum="$minimum_targets" '
+        NF != 2 { bad=1; next }
+        $1 !~ /^[A-Za-z0-9][A-Za-z0-9_.-]*$/ { bad=1 }
+        $2 !~ /^https:\/\/[A-Za-z0-9]/ || $2 ~ /[[:space:]|]/ { bad=1 }
+        seen[$1]++ { bad=1 }
+        END { exit bad || NR < minimum ? 1 : 0 }
+    ' "$1"
+}
+
+update_test_targets() {
+    test_suite_download=$1
+    test_targets_next="$KZM_TMP/test-targets.tsv"
+    [ -r "$KZM_SHARE/test-targets.base.tsv" ] || {
+        warn "нет встроенного списка тестовых доменов; прежний список сохранён"
+        return 1
+    }
+    if ! fetch_url "$TEST_SUITE_V2_URL" "$test_suite_download"; then
+        warn "DPI-список Hyperion не скачан; прежний список тестов сохранён"
+        return 1
+    fi
+    cp "$KZM_SHARE/test-targets.base.tsv" "$test_targets_next" || return 1
+    awk -f "$KZM_LIBEXEC/import-suite-v2.awk" "$test_suite_download" >> "$test_targets_next" || return 1
+    awk -F'|' '!seen[$1]++ { print }' "$test_targets_next" > "$test_targets_next.clean" || return 1
+    validate_test_targets "$test_targets_next.clean" || {
+        warn "новый список тестов повреждён; прежний список сохранён"
+        return 1
+    }
+    test_target_count=$(awk 'END { print NR+0 }' "$test_targets_next.clean")
+    [ "$test_target_count" -ge "$MIN_FULL_TEST_TARGETS" ] || {
+        warn "в полном списке только $test_target_count целей; ожидалось не меньше $MIN_FULL_TEST_TARGETS, прежний список сохранён"
+        return 1
+    }
+    cp "$test_targets_next.clean" "$TEST_TARGETS.next.$$" || return 1
+    mv "$TEST_TARGETS.next.$$" "$TEST_TARGETS" || return 1
+    say "Обновлён список тестов Zapret Manager/Hyperion: $test_target_count целей."
+}
+
+prepare_flowseal_catalog() {
+    flow_output=$1
+    mkdir -p "$flow_output" || die "не удалось подготовить каталог Flowseal"
+    : > "$flow_output/index.tsv"
+
+    if [ -n "${FLOWSEAL_SOURCE_DIR:-}" ]; then
+        [ -d "$FLOWSEAL_SOURCE_DIR" ] || die "FLOWSEAL_SOURCE_DIR не существует"
+        flow_base=$FLOWSEAL_SOURCE_DIR
+    else
+        command -v unzip >/dev/null 2>&1 || die "для импорта Flowseal нужен unzip: opkg install unzip"
+        say "Скачиваю стратегии Flowseal..."
+        fetch_url "$FLOWSEAL_ZIP_URL" "$KZM_TMP/flowseal.zip" || die "не удалось скачать Flowseal main.zip"
+        unzip -tq "$KZM_TMP/flowseal.zip" >/dev/null 2>&1 || die "архив Flowseal повреждён"
+        if ! unzip -Z1 "$KZM_TMP/flowseal.zip" > "$KZM_TMP/flowseal.entries" 2>/dev/null; then
+            # BusyBox unzip has no -Z1. Its listing keeps the full filename,
+            # including spaces, after the fixed length/date/time columns.
+            unzip -lq "$KZM_TMP/flowseal.zip" 2>/dev/null | awk '
+                /^[[:space:]]*[0-9]+[[:space:]]+[0-9-]+[[:space:]]+[0-9:]+[[:space:]]+/ {
+                    name=$0
+                    sub(/^[[:space:]]*[0-9]+[[:space:]]+[0-9-]+[[:space:]]+[0-9:]+[[:space:]]+/, "", name)
+                    print name
+                }
+            ' > "$KZM_TMP/flowseal.entries" || die "unzip не смог показать список файлов Flowseal"
+        fi
+        [ -s "$KZM_TMP/flowseal.entries" ] || die "архив Flowseal не содержит файлов"
+        awk -F/ '
+            $1 == "" { bad=1 }
+            $1 ~ /^[A-Za-z]:$/ { bad=1 }
+            index($0, "\\") { bad=1 }
+            { for (i=1; i<=NF; i++) if ($i == "..") bad=1 }
+            END { exit bad ? 1 : 0 }
+        ' "$KZM_TMP/flowseal.entries" || die "архив Flowseal содержит небезопасный путь"
+        mkdir -p "$KZM_TMP/flowseal-source" || die "не удалось подготовить распаковку Flowseal"
+        unzip -oq "$KZM_TMP/flowseal.zip" -d "$KZM_TMP/flowseal-source" || die "не удалось распаковать Flowseal"
+        flow_base=$KZM_TMP/flowseal-source
+    fi
+
+    find "$flow_base" -type f -name 'general*.bat' 2>/dev/null | sort > "$KZM_TMP/flowseal.files"
+    while IFS= read -r flow_file; do
+        [ -f "$flow_file" ] || continue
+        flow_label=${flow_file##*/}
+        flow_label=${flow_label%.bat}
+        [ "$flow_label" != 'general (ALT5)' ] || continue
+        case "$flow_label" in *'|'*) die "небезопасное имя Flowseal-профиля" ;; esac
+        flow_id=$(printf '%s\n' "$flow_label" | sed -e 's/[^A-Za-z0-9]/_/g' -e 's/__*/_/g' -e 's/^_//' -e 's/_$//')
+        case "$flow_id" in ''|*[!A-Za-z0-9_]*) die "не удалось сформировать ID Flowseal-профиля" ;; esac
+        [ ! -e "$flow_output/$flow_id.strategy" ] || die "повторяющийся ID Flowseal: $flow_id"
+        awk \
+            -v output_file="$flow_output/$flow_id.strategy" \
+            -v profile_label="$flow_label" \
+            -v exclude_file="$EXCLUDE_LIST" \
+            -v fake_dir="$FAKE_DIR" \
+            -f "$KZM_LIBEXEC/import-flowseal.awk" \
+            "$flow_file" || die "не удалось импортировать Flowseal-профиль $flow_label"
+        printf '%s|%s\n' "$flow_id" "$flow_label" >> "$flow_output/index.tsv"
+    done < "$KZM_TMP/flowseal.files"
+}
+
+prepare_discord_script_catalog() {
+    discord_script_output=$1
+    mkdir -p "$discord_script_output" || die "не удалось подготовить каталог Discord 50-*"
+
+    grep -F 'DNUM_STUN4ALL' "$KZM_TMP/50-stun4all.source" >/dev/null 2>&1 || die "источник 50-stun4all изменил ожидаемый формат"
+    grep -F 'DNUM_QUIC4ALL' "$KZM_TMP/50-quic4all.source" >/dev/null 2>&1 || die "источник 50-quic4all изменил ожидаемый формат"
+    grep -F 'DISCORD_MEDIA_PORT_RANGE' "$KZM_TMP/50-discord-media.source" >/dev/null 2>&1 || die "источник 50-discord-media изменил ожидаемый формат"
+    grep -F 'DISCORD_SUBNETS=' "$KZM_TMP/50-discord.source" >/dev/null 2>&1 || die "источник 50-discord изменил ожидаемый формат"
+
+    {
+        printf '%s\n' 'mode|upstream|source|support|mapping'
+        printf '50-stun4all|bol-van/zapret master|%s|unsupported-safe|requires packet-signature firewall hook on all UDP\n' "$DISCORD_STUN4ALL_URL"
+        printf '50-quic4all|bol-van/zapret master|%s|unsupported-safe|requires QUIC-initial firewall signature on all UDP\n' "$DISCORD_QUIC4ALL_URL"
+        printf '50-discord-media|bol-van/zapret master|%s|native-alias|existing KZM discord,stun voice/media block; no second block\n' "$DISCORD_MEDIA_SCRIPT_URL"
+        printf '50-discord|bol-van/zapret v70.5|%s|unsupported-safe|requires frozen destination ipset and first-packet firewall hook\n' "$DISCORD_LEGACY_SCRIPT_URL"
+    } > "$discord_script_output/sources.tsv"
+}
+
+catalog_update() {
+    ensure_layout
+    make_tmp
+    mkdir -p "$KZM_TMP/general" "$KZM_TMP/flowseal" "$KZM_TMP/youtube" "$KZM_TMP/extras" "$KZM_TMP/discord" "$KZM_TMP/discord-scripts"
+
+    say "Скачиваю каталог v1-v10..."
+    fetch_url "$GENERAL_URL" "$KZM_TMP/Strategies.md" || die "не удалось скачать Strategies.md"
+    awk \
+        -v general_dir="$KZM_TMP/general" \
+        -v extras_dir="$KZM_TMP/extras" \
+        -v exclude_file="$EXCLUDE_LIST" \
+        -v youtube_file="$YOUTUBE_LIST" \
+        -v fake_dir="$FAKE_DIR" \
+        -f "$KZM_LIBEXEC/import-general.awk" \
+        "$KZM_TMP/Strategies.md" || die "не удалось разобрать Strategies.md"
+
+    say "Скачиваю каталог YouTube..."
+    fetch_url "$YOUTUBE_URL" "$KZM_TMP/StrYoutube" || die "не удалось скачать StrYoutube"
+    awk \
+        -v youtube_dir="$KZM_TMP/youtube" \
+        -v youtube_file="$YOUTUBE_LIST" \
+        -v fake_dir="$FAKE_DIR" \
+        -f "$KZM_LIBEXEC/import-youtube.awk" \
+        "$KZM_TMP/StrYoutube" || die "не удалось разобрать StrYoutube"
+
+    say "Скачиваю профили Discord media..."
+    fetch_url "$DISCORD_URL" "$KZM_TMP/Zapret-Manager.sh" || die "не удалось скачать Zapret-Manager.sh"
+    awk \
+        -v discord_dir="$KZM_TMP/discord" \
+        -v fake_dir="$FAKE_DIR" \
+        -f "$KZM_LIBEXEC/import-discord.awk" \
+        "$KZM_TMP/Zapret-Manager.sh" || die "не удалось разобрать Discord Dv-профили"
+
+    say "Проверяю источники дополнительных Discord 50-* режимов..."
+    fetch_url "$DISCORD_STUN4ALL_URL" "$KZM_TMP/50-stun4all.source" || die "не удалось скачать источник 50-stun4all"
+    fetch_url "$DISCORD_QUIC4ALL_URL" "$KZM_TMP/50-quic4all.source" || die "не удалось скачать источник 50-quic4all"
+    fetch_url "$DISCORD_MEDIA_SCRIPT_URL" "$KZM_TMP/50-discord-media.source" || die "не удалось скачать источник 50-discord-media"
+    fetch_url "$DISCORD_LEGACY_SCRIPT_URL" "$KZM_TMP/50-discord.source" || die "не удалось скачать источник 50-discord"
+    prepare_discord_script_catalog "$KZM_TMP/discord-scripts"
+
+    prepare_flowseal_catalog "$KZM_TMP/flowseal"
+
+    general_count=$(count_profiles "$KZM_TMP/general")
+    flowseal_count=$(count_profiles "$KZM_TMP/flowseal")
+    youtube_count=$(count_profiles "$KZM_TMP/youtube")
+    discord_count=$(count_profiles "$KZM_TMP/discord")
+    [ "$general_count" -ge 1 ] || die "в Strategies.md не найдено ни одной стратегии"
+    [ "$flowseal_count" -ge 1 ] || die "не найдено ни одной Flowseal-стратегии"
+    [ "$youtube_count" -ge 1 ] || die "в StrYoutube не найдено ни одной стратегии"
+    [ "$discord_count" -ge 1 ] || die "в Zapret-Manager.sh не найдено ни одного Dv-профиля"
+
+    for strategy_file in "$KZM_TMP"/general/*.strategy "$KZM_TMP"/flowseal/*.strategy "$KZM_TMP"/youtube/*.strategy "$KZM_TMP"/extras/*.strategy "$KZM_TMP"/discord/*.strategy; do
+        [ -f "$strategy_file" ] || continue
+        validate_strategy "$strategy_file" || die "опасная или повреждённая стратегия: $strategy_file"
+    done
+
+    replace_catalog_dir "$KZM_TMP/general" "$GENERAL_DIR" general
+    replace_catalog_dir "$KZM_TMP/flowseal" "$FLOWSEAL_DIR" flowseal
+    replace_catalog_dir "$KZM_TMP/youtube" "$YOUTUBE_DIR" youtube
+    replace_catalog_dir "$KZM_TMP/extras" "$EXTRAS_DIR" extras
+    replace_catalog_dir "$KZM_TMP/discord" "$DISCORD_DIR" discord
+    replace_catalog_dir "$KZM_TMP/discord-scripts" "$DISCORD_SCRIPT_DIR" discord-scripts
+    update_exclude_list "$KZM_TMP/exclude.list" || true
+    update_test_targets "$KZM_TMP/suite.v2.json" || true
+    date -u '+%Y-%m-%dT%H:%M:%SZ' > "$CATALOG_DIR/updated_at"
+
+    say "Импортировано: v=$general_count, Flowseal=$flowseal_count, YouTube=$youtube_count, Discord media=$discord_count; источники Discord 50-* проверены."
+    assets_update
+}
+
+fake_references() {
+    {
+        # The QUIC profile is generated locally rather than stored in the catalog.
+        printf '%s\n' 'quic_initial_www_google_com.bin'
+        [ "$DISCORD_FAKE" = off ] || printf '%s\n' "$DISCORD_FAKE"
+        find "$CATALOG_DIR" -type f -name '*.strategy' 2>/dev/null | while IFS= read -r strategy_file; do
+        awk -v prefix="$FAKE_DIR/" '
+            index($0, prefix) {
+                value = substr($0, index($0, prefix) + length(prefix))
+                sub(/[[:space:]].*$/, "", value)
+                if (value ~ /^[A-Za-z0-9_.-]+$/) print value
+            }
+        ' "$strategy_file"
+        done
+    } | sort -u
+}
+
+fetch_fake_asset() {
+    fake_asset_name=$1
+    fake_asset_target=$2
+    case "$fake_asset_name" in
+        stun2.bin|quic_initial_4pda_to.bin|quic_initial_tencent_com.bin|tls_clienthello_sochi_park.bin|quic_initial_steamcommunity_com.bin|quic_initial_5ka_ru.bin|quic_initial_rutube_ru.bin)
+            fetch_url "$FLOWSEAL_FAKE_BASE_URL/$fake_asset_name" "$fake_asset_target" 2>/dev/null || \
+                fetch_url "$BOLVAN_FAKE_BASE_URL/$fake_asset_name" "$fake_asset_target" 2>/dev/null
+            ;;
+        *)
+            fetch_url "$BOLVAN_FAKE_BASE_URL/$fake_asset_name" "$fake_asset_target" 2>/dev/null || \
+                fetch_url "$FLOWSEAL_FAKE_BASE_URL/$fake_asset_name" "$fake_asset_target" 2>/dev/null
+            ;;
+    esac
+}
+
+assets_update() {
+    ensure_layout
+    if [ -z "${KZM_TMP:-}" ]; then
+        make_tmp
+    fi
+    asset_failures=0
+    asset_total=0
+    fake_references > "$KZM_TMP/fake.references"
+    while IFS= read -r fake_name; do
+        [ -n "$fake_name" ] || continue
+        if [ -s "$FAKE_DIR/$fake_name" ]; then
+            continue
+        fi
+        asset_total=$((asset_total + 1))
+        asset_tmp="$KZM_TMP/$fake_name"
+        if fetch_fake_asset "$fake_name" "$asset_tmp"; then
+            if [ -s "$asset_tmp" ]; then
+                mv "$asset_tmp" "$FAKE_DIR/$fake_name"
+                say "Загружен fake-файл: $fake_name"
+            else
+                asset_failures=$((asset_failures + 1))
+            fi
+        else
+            rm -f "$asset_tmp"
+            asset_failures=$((asset_failures + 1))
+            warn "не удалось скачать fake-файл $fake_name"
+        fi
+    done < "$KZM_TMP/fake.references"
+    [ "$asset_failures" -eq 0 ] || return 1
+    return 0
+}
+
+profile_file_general() {
+    case "$GENERAL_PROFILE" in
+        flow:*)
+            profile_name=${GENERAL_PROFILE#flow:}
+            case "$profile_name" in *[!A-Za-z0-9_.-]*|'') die "некорректное имя Flowseal-стратегии" ;; esac
+            printf '%s/%s.strategy\n' "$FLOWSEAL_DIR" "$profile_name"
+            return
+            ;;
+        custom:*)
+            profile_name=${GENERAL_PROFILE#custom:}
+            ;;
+        *)
+            profile_name=$GENERAL_PROFILE
+            printf '%s/%s.strategy\n' "$GENERAL_DIR" "$profile_name"
+            return
+            ;;
+    esac
+    case "$profile_name" in
+        *[!A-Za-z0-9_.-]*|'') die "некорректное имя custom-стратегии" ;;
+    esac
+    printf '%s/%s.strategy\n' "$CUSTOM_DIR" "$profile_name"
+}
+
+general_profile_label() {
+    case "$GENERAL_PROFILE" in
+        flow:*)
+            profile_id=${GENERAL_PROFILE#flow:}
+            profile_label=$(awk -F'|' -v id="$profile_id" '$1 == id { print $2; exit }' "$FLOWSEAL_DIR/index.tsv" 2>/dev/null)
+            if [ -n "$profile_label" ]; then
+                printf 'Flowseal: %s' "$profile_label"
+            else
+                printf '%s' "$GENERAL_PROFILE"
+            fi
+            ;;
+        *) printf '%s' "$GENERAL_PROFILE" ;;
+    esac
+}
+
+profile_file_youtube() {
+    printf '%s/%s.strategy\n' "$YOUTUBE_DIR" "$YOUTUBE_PROFILE"
+}
+
+canonicalize_strategy() {
+    awk '
+        /^[[:space:]]*$/ || /^#/ { next }
+        $0 == "--new" { if (has_content) pending_new=1; next }
+        {
+            if (pending_new) { print "--new"; pending_new=0 }
+            print
+            has_content=1
+        }
+    ' "$1"
+}
+
+strategy_with_filter() {
+    filter_source=$1
+    filter_mode=$2
+    filter_has_domains=0
+    [ -s "$USER_LIST" ] && filter_has_domains=1
+    awk \
+        -v scope="$TRAFFIC_SCOPE" \
+        -v mode="$filter_mode" \
+        -v has_domains="$filter_has_domains" \
+        -v user_list="$USER_LIST" \
+        -v user_ipset="$USER_IPSET" \
+        -v auto_list="$AUTO_LIST" \
+        -v exclude_list="$EXCLUDE_LIST" '
+        function emit_scope() {
+            if (mode == "domain") {
+                if (has_domains) {
+                    print "--hostlist=" user_list
+                }
+                if (scope == "auto") {
+                    print "--hostlist-auto=" auto_list
+                }
+            } else if (mode == "network") {
+                print "--ipset=" user_ipset
+                # Keep an include filter even if the file is emptied while
+                # nfqws is running; otherwise an empty include can mean all.
+                print "--ipset-ip=0.0.0.0"
+            }
+            print "--hostlist-exclude=" exclude_list
+        }
+        /^--hostlist-exclude=/ && !done {
+            emit_scope()
+            done=1
+            next
+        }
+        { print }
+        END {
+            if (!done) {
+                # Imported v-strategies currently always carry an exclude list.
+                # Refuse silent scope changes if their format changes upstream.
+                exit 3
+            }
+        }
+    ' "$filter_source"
+}
+
+strategy_with_scope() {
+    scope_source=$1
+    case "$TRAFFIC_SCOPE" in
+        all)
+            strategy_with_filter "$scope_source" all
+            ;;
+        list|auto)
+            scope_emitted=0
+            if [ -s "$USER_LIST" ] || [ "$TRAFFIC_SCOPE" = auto ]; then
+                strategy_with_filter "$scope_source" domain || return 1
+                scope_emitted=1
+            fi
+            if [ -s "$USER_IPSET" ]; then
+                if [ "$scope_emitted" -eq 1 ]; then
+                    printf '%s\n' '--new'
+                fi
+                strategy_with_filter "$scope_source" network || return 1
+                scope_emitted=1
+            fi
+            [ "$scope_emitted" -eq 1 ] || return 3
+            ;;
+        *) return 2 ;;
+    esac
+}
+
+append_strategy() {
+    append_source=$1
+    append_target=$2
+    append_tmp=$3
+    canonicalize_strategy "$append_source" > "$append_tmp" || return 1
+    [ -s "$append_tmp" ] || return 1
+    if [ -s "$append_target" ]; then
+        printf '%s\n' '--new' >> "$append_target"
+    fi
+    cat "$append_tmp" >> "$append_target"
+}
+
+render_quic_strategy() {
+    quic_target=$1
+    {
+        printf '%s\n' '--filter-udp=443'
+        printf '%s\n' "--hostlist=$YOUTUBE_LIST"
+        printf '%s\n' '--dpi-desync=fake'
+        printf '%s\n' '--dpi-desync-repeats=11'
+        printf '%s\n' "--dpi-desync-fake-quic=$FAKE_DIR/quic_initial_www_google_com.bin"
+    } > "$quic_target"
+}
+
+render_discord_voice_strategy() {
+    discord_voice_source=$1
+    discord_voice_target=$2
+    discord_fake_path=
+    if [ "$DISCORD_FAKE" != off ]; then
+        discord_fake_path="$FAKE_DIR/$DISCORD_FAKE"
+        [ -s "$discord_fake_path" ] || die "нет fake-файла $DISCORD_FAKE; выполните: kzm update или выберите fake заново"
+    fi
+    awk -v fake_path="$discord_fake_path" '
+        /^--dpi-desync-fake-(discord|stun)=/ { next }
+        { print }
+        END {
+            if (fake_path != "") {
+                print "--dpi-desync-fake-discord=" fake_path
+                print "--dpi-desync-fake-stun=" fake_path
+            }
+        }
+    ' "$discord_voice_source" > "$discord_voice_target"
+}
+
+render_composition() {
+    render_target=$1
+    ensure_layout
+    validate_state
+    : > "$render_target"
+
+    if [ "$YOUTUBE_PROFILE" != "off" ]; then
+        youtube_profile_file=$(profile_file_youtube)
+        [ -f "$youtube_profile_file" ] || die "нет YouTube-стратегии $YOUTUBE_PROFILE; выполните: kzm update"
+        validate_strategy "$youtube_profile_file" || die "повреждена стратегия $YOUTUBE_PROFILE"
+        append_strategy "$youtube_profile_file" "$render_target" "$KZM_TMP/youtube.normalized" || die "пустая YouTube-стратегия"
+    fi
+
+    if [ "$QUIC_ENABLED" -eq 1 ]; then
+        render_quic_strategy "$KZM_TMP/quic.strategy"
+        append_strategy "$KZM_TMP/quic.strategy" "$render_target" "$KZM_TMP/quic.normalized" || die "пустой QUIC-блок"
+    fi
+
+    general_profile_file=$(profile_file_general)
+    [ -f "$general_profile_file" ] || die "нет стратегии $GENERAL_PROFILE; выполните: kzm update"
+    validate_strategy "$general_profile_file" || die "повреждена стратегия $GENERAL_PROFILE"
+    strategy_with_scope "$general_profile_file" > "$KZM_TMP/general.scoped" || die "формат стратегии $GENERAL_PROFILE изменился и не поддерживает scope"
+    append_strategy "$KZM_TMP/general.scoped" "$render_target" "$KZM_TMP/general.normalized" || die "пустая основная стратегия"
+
+    if [ "$DISCORD_ENABLED" -eq 1 ]; then
+        [ -f "$EXTRAS_DIR/discord-voice.strategy" ] || die "нет Discord voice-блока; выполните: kzm update"
+        render_discord_voice_strategy "$EXTRAS_DIR/discord-voice.strategy" "$KZM_TMP/discord-voice.strategy"
+        validate_strategy "$KZM_TMP/discord-voice.strategy" || die "повреждён Discord voice-блок"
+        append_strategy "$KZM_TMP/discord-voice.strategy" "$render_target" "$KZM_TMP/discord-voice.normalized" || die "пустой Discord voice-блок"
+        if [ "$DISCORD_MEDIA_PROFILE" != "off" ]; then
+            discord_media_file="$DISCORD_DIR/$DISCORD_MEDIA_PROFILE.strategy"
+            [ -f "$discord_media_file" ] || die "нет Discord media-профиля $DISCORD_MEDIA_PROFILE; выполните: kzm update"
+            validate_strategy "$discord_media_file" || die "повреждён профиль $DISCORD_MEDIA_PROFILE"
+            append_strategy "$discord_media_file" "$render_target" "$KZM_TMP/discord-media.normalized" || die "пустой Discord media-профиль"
+        fi
+    fi
+
+    case "$DISCORD_SCRIPT" in
+        off) ;;
+        50-discord-media)
+            # Safe Keenetic mapping: this name is an alias for the existing
+            # KZM Discord voice/media composition above, never a second block.
+            ;;
+        *) die "режим $DISCORD_SCRIPT недоступен в безопасном режиме Keenetic; выберите off или 50-discord-media" ;;
+    esac
+
+    if [ "$GAME_ENABLED" -eq 1 ]; then
+        [ -f "$EXTRAS_DIR/game.strategy" ] || die "нет игрового блока; выполните: kzm update"
+        append_strategy "$EXTRAS_DIR/game.strategy" "$render_target" "$KZM_TMP/game.normalized" || die "пустой игровой блок"
+    fi
+
+    validate_strategy "$render_target" || die "собранная стратегия не прошла проверку"
+}
+
+render_candidate() {
+    candidate_target=$1
+    [ -f "$NFQWS_CONFIG" ] || die "не найден $NFQWS_CONFIG; требуется классический nfqws-keenetic"
+    render_composition "$KZM_TMP/composed.strategy"
+    awk -f "$KZM_LIBEXEC/render-replacements.awk" "$KZM_TMP/composed.strategy" > "$KZM_TMP/replacements.tsv" || die "не удалось собрать параметры nfqws"
+    awk -v replacements_file="$KZM_TMP/replacements.tsv" -f "$KZM_LIBEXEC/patch-config.awk" "$NFQWS_CONFIG" > "$candidate_target" || die "не удалось сформировать конфиг"
+    sh -n "$candidate_target" || die "сформированный nfqws.conf синтаксически некорректен"
+    validate_candidate_with_engine "$candidate_target" || die "классический nfqws отклонил собранные параметры"
+}
+
+validate_candidate_with_engine() (
+    candidate_config=$1
+    [ -x "$NFQWS_BIN" ] || {
+        warn "не найден классический бинарник $NFQWS_BIN"
+        return 1
+    }
+    # shellcheck disable=SC1090
+    . "$candidate_config"
+    if [ -n "${NFQWS_ARGS_CUSTOM:-}" ]; then
+        # Word splitting is intentional: nfqws expects one argv item per option.
+        # Downloaded lines have already passed validate_strategy.
+        # shellcheck disable=SC2086
+        "$NFQWS_BIN" --dry-run --qnum="${NFQUEUE_NUM:-200}" $NFQWS_ARGS_CUSTOM --new $NFQWS_ARGS
+    else
+        # shellcheck disable=SC2086
+        "$NFQWS_BIN" --dry-run --qnum="${NFQUEUE_NUM:-200}" $NFQWS_ARGS
+    fi
+)
+
+timestamp() {
+    date '+%Y%m%d-%H%M%S'
+}
+
+prune_backups() {
+    [ "$BACKUP_KEEP" -ge 1 ] 2>/dev/null || BACKUP_KEEP=10
+    # Names are generated by this program and cannot contain whitespace.
+    # shellcheck disable=SC2012
+    ls -1t "$BACKUP_DIR"/nfqws.conf.* 2>/dev/null | awk -v keep="$BACKUP_KEEP" 'NR > keep' | while IFS= read -r old_backup; do
+        case "$old_backup" in
+            "$BACKUP_DIR"/nfqws.conf.*) rm -f "$old_backup" ;;
+        esac
+    done
+}
+
+create_backup() {
+    ensure_layout
+    [ -f "$NFQWS_CONFIG" ] || die "нечего резервировать: $NFQWS_CONFIG отсутствует"
+    backup_path="$BACKUP_DIR/nfqws.conf.$(timestamp).$$"
+    cp -p "$NFQWS_CONFIG" "$backup_path" || die "не удалось создать резервную копию"
+    prune_backups
+    printf '%s\n' "$backup_path"
+}
+
+restart_service() {
+    [ -x "$NFQWS_INIT" ] || {
+        warn "не найден исполняемый $NFQWS_INIT"
+        return 1
+    }
+    "$NFQWS_INIT" restart
+}
+
+apply_config() {
+    do_restart=0
+    confirmed=0
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            --restart) do_restart=1 ;;
+            --yes) confirmed=1 ;;
+            *) die "неизвестный параметр apply: $1" ;;
+        esac
+        shift
+    done
+    if [ "$do_restart" -eq 1 ] && [ "$confirmed" -ne 1 ]; then
+        die "для перезапуска явно добавьте --yes"
+    fi
+    if [ "$do_restart" -eq 1 ] && [ ! -x "$NFQWS_INIT" ]; then
+        die "не найден $NFQWS_INIT; конфиг не изменён"
+    fi
+    make_tmp
+    render_candidate "$KZM_TMP/nfqws.conf"
+    backup_path=$(create_backup) || die "не удалось создать резервную копию; конфиг не изменён"
+    had_active_strategy=0
+    had_configured_state=0
+    if [ -f "$ACTIVE_STRATEGY" ]; then
+        cp "$ACTIVE_STRATEGY" "$KZM_TMP/previous-active.strategy" || die "не удалось сохранить метаданные текущего конфига"
+        had_active_strategy=1
+    fi
+    if [ -f "$CONFIGURED_STATE" ]; then
+        cp "$CONFIGURED_STATE" "$KZM_TMP/previous-configured-state.conf" || die "не удалось сохранить состояние текущего конфига"
+        had_configured_state=1
+    fi
+    config_next="$NFQWS_CONFIG.kzm-new"
+    cp "$KZM_TMP/nfqws.conf" "$config_next" || die "не удалось подготовить новый конфиг"
+    chmod 600 "$config_next" 2>/dev/null || true
+    mv "$config_next" "$NFQWS_CONFIG" || die "не удалось заменить nfqws.conf"
+    if ! cp "$KZM_TMP/composed.strategy" "$ACTIVE_STRATEGY.next.$$" || \
+       ! mv "$ACTIVE_STRATEGY.next.$$" "$ACTIVE_STRATEGY" || \
+       ! cp "$STATE_FILE" "$CONFIGURED_STATE.next.$$" || \
+       ! mv "$CONFIGURED_STATE.next.$$" "$CONFIGURED_STATE"; then
+        rm -f "$ACTIVE_STRATEGY.next.$$" "$CONFIGURED_STATE.next.$$"
+        cp "$backup_path" "$NFQWS_CONFIG"
+        if [ "$had_active_strategy" -eq 1 ]; then
+            cp "$KZM_TMP/previous-active.strategy" "$ACTIVE_STRATEGY"
+        else
+            rm -f "$ACTIVE_STRATEGY"
+        fi
+        if [ "$had_configured_state" -eq 1 ]; then
+            cp "$KZM_TMP/previous-configured-state.conf" "$CONFIGURED_STATE"
+        else
+            rm -f "$CONFIGURED_STATE"
+        fi
+        die "не удалось сохранить состояние нового конфига; предыдущий конфиг возвращён"
+    fi
+    say "Конфиг записан. Резервная копия: $backup_path"
+    if [ "$do_restart" -eq 1 ]; then
+        if restart_service; then
+            cp "$CONFIGURED_STATE" "$RUNNING_STATE.next.$$" && mv "$RUNNING_STATE.next.$$" "$RUNNING_STATE"
+            say "Классический nfqws перезапущен."
+        else
+            warn "перезапуск не удался; возвращаю предыдущий конфиг"
+            cp "$backup_path" "$NFQWS_CONFIG"
+            if [ "$had_active_strategy" -eq 1 ]; then
+                cp "$KZM_TMP/previous-active.strategy" "$ACTIVE_STRATEGY"
+            else
+                rm -f "$ACTIVE_STRATEGY"
+            fi
+            if [ "$had_configured_state" -eq 1 ]; then
+                cp "$KZM_TMP/previous-configured-state.conf" "$CONFIGURED_STATE"
+            else
+                rm -f "$CONFIGURED_STATE"
+            fi
+            "$NFQWS_INIT" restart >/dev/null 2>&1 || true
+            die "новая конфигурация отменена"
+        fi
+    else
+        say "Служба НЕ перезапускалась. Для применения: kzm service restart --yes"
+    fi
+}
+
+select_general() {
+    selected=$1
+    case "$selected" in
+        v[0-9]*) selected_path="$GENERAL_DIR/$selected.strategy" ;;
+        flow:*)
+            flow_name=${selected#flow:}
+            case "$flow_name" in *[!A-Za-z0-9_.-]*|'') die "некорректное имя Flowseal-профиля" ;; esac
+            selected_path="$FLOWSEAL_DIR/$flow_name.strategy"
+            ;;
+        custom:*)
+            custom_name=${selected#custom:}
+            case "$custom_name" in *[!A-Za-z0-9_.-]*|'') die "некорректное имя" ;; esac
+            selected_path="$CUSTOM_DIR/$custom_name.strategy"
+            ;;
+        *) die "ожидается vN, flow:NAME или custom:NAME" ;;
+    esac
+    [ -f "$selected_path" ] || die "стратегия $selected не найдена"
+    GENERAL_PROFILE=$selected
+    write_state_file
+    say "Выбрана основная стратегия $selected. Конфиг ещё не менялся."
+}
+
+select_youtube() {
+    selected=$1
+    if [ "$selected" != "off" ]; then
+        case "$selected" in Yv[0-9]*) ;; *) die "ожидается YvNN или off" ;; esac
+        [ -f "$YOUTUBE_DIR/$selected.strategy" ] || die "стратегия $selected не найдена"
+    fi
+    YOUTUBE_PROFILE=$selected
+    write_state_file
+    say "YouTube-стратегия: $selected. Конфиг ещё не менялся."
+}
+
+select_toggle() {
+    toggle_name=$1
+    toggle_value=$2
+    case "$toggle_value" in on|1) toggle_number=1 ;; off|0) toggle_number=0 ;; *) die "ожидается on или off" ;; esac
+    case "$toggle_name" in
+        discord) DISCORD_ENABLED=$toggle_number ;;
+        quic) QUIC_ENABLED=$toggle_number ;;
+        game) GAME_ENABLED=$toggle_number ;;
+        *) die "неизвестный переключатель $toggle_name" ;;
+    esac
+    write_state_file
+    say "$toggle_name: $toggle_value. Конфиг ещё не менялся."
+}
+
+select_discord_media() {
+    selected=$1
+    if [ "$selected" != "off" ]; then
+        case "$selected" in Dv[0-9]*) ;; *) die "ожидается DvN или off" ;; esac
+        [ -f "$DISCORD_DIR/$selected.strategy" ] || die "профиль $selected не найден"
+    fi
+    DISCORD_MEDIA_PROFILE=$selected
+    write_state_file
+    say "Discord media: $selected. Конфиг ещё не менялся."
+}
+
+select_discord_script() {
+    selected=$1
+    case "$selected" in
+        off|50-discord-media) ;;
+        50-stun4all|50-quic4all|50-discord)
+            die "$selected требует отдельного packet-signature firewall hook и недоступен в безопасном режиме Keenetic"
+            ;;
+        *) die "ожидается off или 50-discord-media" ;;
+    esac
+    DISCORD_SCRIPT=$selected
+    if [ "$selected" = 50-discord-media ]; then
+        # The native alias is implemented by the existing KZM voice/media
+        # block, so selecting it must also enable that block.
+        DISCORD_ENABLED=1
+    fi
+    write_state_file
+    say "Дополнительный режим Discord: $selected. OpenWrt-скрипт и вторая служба не устанавливались; конфиг ещё не менялся."
+}
+
+select_discord_fake() {
+    selected=$1
+    case "$selected" in
+        off) ;;
+        stun.bin|stun2.bin|quic_initial_4pda_to.bin|quic_initial_tencent_com.bin|tls_clienthello_sochi_park.bin|quic_initial_www_google_com.bin|quic_initial_steamcommunity_com.bin|quic_initial_5ka_ru.bin|quic_initial_rutube_ru.bin) ;;
+        *) die "неизвестный Discord fake-файл" ;;
+    esac
+    if [ "$selected" != off ] && [ ! -s "$FAKE_DIR/$selected" ]; then
+        ensure_layout
+        if [ -z "${KZM_TMP:-}" ]; then
+            make_tmp
+        fi
+        say "Скачиваю fake-файл $selected..."
+        if fetch_fake_asset "$selected" "$KZM_TMP/$selected" && [ -s "$KZM_TMP/$selected" ]; then
+            mv "$KZM_TMP/$selected" "$FAKE_DIR/$selected" || die "не удалось сохранить fake-файл $selected"
+        else
+            rm -f "$KZM_TMP/$selected"
+            die "не удалось скачать fake-файл $selected; выбор не изменён"
+        fi
+    fi
+    DISCORD_FAKE=$selected
+    write_state_file
+    if [ "$selected" = off ]; then
+        say "Переопределение fake для discord,stun удалено; nfqws использует встроенные payload. Конфиг ещё не менялся."
+    else
+        say "fake для discord,stun: $selected. Конфиг ещё не менялся."
+    fi
+}
+
+select_scope() {
+    selected=$1
+    case "$selected" in all|list|auto) ;; *) die "ожидается all, list или auto" ;; esac
+    if [ "$selected" = "list" ] && [ ! -s "$USER_LIST" ] && [ ! -s "$USER_IPSET" ]; then
+        die "пользовательский список пуст; сначала добавьте домен или сеть"
+    fi
+    TRAFFIC_SCOPE=$selected
+    write_state_file
+    say "Режим трафика: $selected. Конфиг ещё не менялся."
+}
+
+list_strategies() {
+    category=${1:-all}
+    case "$category" in
+        general|all)
+            say "Основные v:"
+            find "$GENERAL_DIR" -type f -name 'v*.strategy' 2>/dev/null | sed 's#.*/v##; s/\.strategy$//' | sort -n | sed 's/^/  v/'
+            if [ -s "$FLOWSEAL_DIR/index.tsv" ]; then
+                say "Flowseal:"
+                awk -F'|' 'NF == 2 { printf "  flow:%-28s %s\n", $1, $2 }' "$FLOWSEAL_DIR/index.tsv"
+            fi
+            [ "$category" = general ] && return
+            ;;
+    esac
+    case "$category" in
+        youtube|all)
+            say "YouTube:"
+            find "$YOUTUBE_DIR" -type f -name '*.strategy' 2>/dev/null | sed 's#.*/##; s/\.strategy$//' | sort | sed 's/^/  /'
+            [ "$category" = youtube ] && return
+            ;;
+    esac
+    case "$category" in
+        discord|all)
+            say "Discord media:"
+            find "$DISCORD_DIR" -type f -name 'Dv*.strategy' 2>/dev/null | sed 's#.*/Dv##; s/\.strategy$//' | sort -n | sed 's/^/  Dv/'
+            [ "$category" = discord ] && return
+            ;;
+    esac
+    case "$category" in
+        custom|all)
+            say "Пользовательские:"
+            find "$CUSTOM_DIR" -type f -name '*.strategy' 2>/dev/null | sed 's#.*/##; s/\.strategy$//' | sort | sed 's/^/  custom:/'
+            ;;
+        *) [ "$category" = all ] || die "категория: general, youtube, discord, custom или all" ;;
+    esac
+}
+
+import_custom() {
+    custom_name=$1
+    custom_source=$2
+    case "$custom_name" in *[!A-Za-z0-9_.-]*|'') die "имя может содержать только A-Z, a-z, 0-9, точку, _ и -" ;; esac
+    [ -f "$custom_source" ] || die "не найден $custom_source"
+    ensure_layout
+    make_tmp
+    awk \
+        -v exclude_file="$EXCLUDE_LIST" \
+        -v youtube_file="$YOUTUBE_LIST" \
+        -v fake_dir="$FAKE_DIR" '
+        {
+            sub(/\r$/, "")
+            gsub("/opt/zapret/ipset/zapret-hosts-user-exclude.txt", exclude_file)
+            gsub("/opt/zapret/ipset/zapret-hosts-google.txt", youtube_file)
+            gsub("/opt/zapret/files/fake/4pda.bin", fake_dir "/tls_clienthello_4pda_to.bin")
+            gsub("/opt/zapret/files/fake/", fake_dir "/")
+            print
+        }
+    ' "$custom_source" > "$KZM_TMP/custom.strategy"
+    validate_strategy "$KZM_TMP/custom.strategy" || die "custom-стратегия не прошла безопасную проверку"
+    cp "$KZM_TMP/custom.strategy" "$CUSTOM_DIR/$custom_name.strategy"
+    say "Импортировано как custom:$custom_name"
+}
+
+normalize_domain() {
+    printf '%s\n' "$1" | tr '[:upper:]' '[:lower:]' | sed -e 's#^[a-z][a-z0-9+.-]*://##' -e 's#/.*$##' -e 's/:.*$//' -e 's/^+\.//' -e 's/^\*\.//' -e 's/^\.//'
+}
+
+domain_valid() {
+    printf '%s\n' "$1" | awk '
+        length($0) < 1 || length($0) > 253 || $0 !~ /\./ { bad=1; next }
+        {
+            count=split($0, labels, ".")
+            for (i=1; i<=count; i++) {
+                if (length(labels[i]) < 1 || length(labels[i]) > 63 ||
+                    labels[i] !~ /^[a-z0-9][a-z0-9-]*[a-z0-9]$/ &&
+                    labels[i] !~ /^[a-z0-9]$/) {
+                    bad=1
+                }
+            }
+        }
+        END { exit bad ? 1 : 0 }
+    '
+}
+
+domain_add() {
+    ensure_layout
+    shift
+    [ "$#" -gt 0 ] || die "укажите хотя бы один домен"
+    make_tmp
+    domain_candidates="$KZM_TMP/domains.add"
+    : > "$domain_candidates"
+    for raw_domain in "$@"; do
+        clean_domain=$(normalize_domain "$raw_domain")
+        domain_valid "$clean_domain" || die "некорректный домен: $raw_domain"
+        grep -qxF "$clean_domain" "$domain_candidates" 2>/dev/null || printf '%s\n' "$clean_domain" >> "$domain_candidates"
+    done
+    domain_next="$USER_LIST.next.$$"
+    awk 'NF && !seen[$0]++ { print }' "$USER_LIST" "$domain_candidates" > "$domain_next" || die "не удалось обновить список доменов"
+    mv "$domain_next" "$USER_LIST" || die "не удалось применить список доменов"
+    while IFS= read -r clean_domain; do
+        say "Добавлен: $clean_domain"
+    done < "$domain_candidates"
+}
+
+domain_remove() {
+    ensure_layout
+    shift
+    [ "$#" -gt 0 ] || die "укажите хотя бы один домен"
+    make_tmp
+    domain_candidates="$KZM_TMP/domains.remove"
+    : > "$domain_candidates"
+    for raw_domain in "$@"; do
+        clean_domain=$(normalize_domain "$raw_domain")
+        domain_valid "$clean_domain" || die "некорректный домен: $raw_domain"
+        grep -qxF "$clean_domain" "$domain_candidates" 2>/dev/null || printf '%s\n' "$clean_domain" >> "$domain_candidates"
+    done
+    list_tmp="$USER_LIST.tmp.$$"
+    awk 'NR==FNR { remove[$0]=1; next } !($0 in remove) { print }' "$domain_candidates" "$USER_LIST" > "$list_tmp" || die "не удалось обновить список доменов"
+    mv "$list_tmp" "$USER_LIST" || die "не удалось применить список доменов"
+    while IFS= read -r clean_domain; do
+        say "Удалён: $clean_domain"
+    done < "$domain_candidates"
+}
+
+normalize_network() {
+    printf '%s\n' "$1" | tr '[:upper:]' '[:lower:]' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'
+}
+
+network_valid() {
+    printf '%s\n' "$1" | awk '
+        function ipv4_valid(address, count, octets, i) {
+            count=split(address, octets, ".")
+            if (count != 4) return 0
+            for (i=1; i<=4; i++) {
+                if (octets[i] !~ /^[0-9]+$/ || octets[i] + 0 > 255) return 0
+            }
+            return 1
+        }
+        function ipv6_valid(address, copy, doubles, count, groups, i, used) {
+            if (address !~ /:/ || address ~ /[^0-9a-f:]/ || address ~ /:::/) return 0
+            if (substr(address, 1, 1) == ":" && substr(address, 1, 2) != "::") return 0
+            if (substr(address, length(address), 1) == ":" && substr(address, length(address)-1, 2) != "::") return 0
+            copy=address
+            doubles=gsub(/::/, "::", copy)
+            if (doubles > 1) return 0
+            count=split(address, groups, ":")
+            used=0
+            for (i=1; i<=count; i++) {
+                if (groups[i] == "") continue
+                if (groups[i] !~ /^[0-9a-f]+$/ || length(groups[i]) > 4) return 0
+                used++
+            }
+            if (doubles == 1) return used < 8
+            return used == 8
+        }
+        {
+            value=$0
+            if (value == "" || value ~ /[[:space:]]/ || value ~ /\/$/ || value ~ /\/.*\//) exit 1
+            part_count=split(value, parts, "/")
+            if (part_count < 1 || part_count > 2 || parts[1] == "") exit 1
+            prefix=parts[2]
+            if (ipv4_valid(parts[1])) {
+                if (part_count == 2 && (prefix !~ /^[0-9]+$/ || prefix + 0 > 32)) exit 1
+                exit 0
+            }
+            if (ipv6_valid(parts[1])) {
+                if (part_count == 2 && (prefix !~ /^[0-9]+$/ || prefix + 0 > 128)) exit 1
+                exit 0
+            }
+            exit 1
+        }
+    '
+}
+
+network_add() {
+    ensure_layout
+    shift
+    [ "$#" -gt 0 ] || die "укажите хотя бы один IP-адрес или CIDR"
+    make_tmp
+    network_candidates="$KZM_TMP/networks.add"
+    : > "$network_candidates"
+    for raw_network in "$@"; do
+        clean_network=$(normalize_network "$raw_network")
+        network_valid "$clean_network" || die "некорректный IP-адрес или CIDR: $raw_network"
+        grep -qxF "$clean_network" "$network_candidates" 2>/dev/null || printf '%s\n' "$clean_network" >> "$network_candidates"
+    done
+    network_next="$USER_IPSET.next.$$"
+    awk 'NF && !seen[$0]++ { print }' "$USER_IPSET" "$network_candidates" > "$network_next" || die "не удалось обновить список сетей"
+    mv "$network_next" "$USER_IPSET" || die "не удалось применить список сетей"
+    while IFS= read -r clean_network; do
+        say "Добавлено: $clean_network"
+    done < "$network_candidates"
+}
+
+network_remove() {
+    ensure_layout
+    shift
+    [ "$#" -gt 0 ] || die "укажите хотя бы один IP-адрес или CIDR"
+    make_tmp
+    network_candidates="$KZM_TMP/networks.remove"
+    : > "$network_candidates"
+    for raw_network in "$@"; do
+        clean_network=$(normalize_network "$raw_network")
+        network_valid "$clean_network" || die "некорректный IP-адрес или CIDR: $raw_network"
+        grep -qxF "$clean_network" "$network_candidates" 2>/dev/null || printf '%s\n' "$clean_network" >> "$network_candidates"
+    done
+    list_tmp="$USER_IPSET.tmp.$$"
+    awk 'NR==FNR { remove[$0]=1; next } !($0 in remove) { print }' "$network_candidates" "$USER_IPSET" > "$list_tmp" || die "не удалось обновить список сетей"
+    mv "$list_tmp" "$USER_IPSET" || die "не удалось применить список сетей"
+    while IFS= read -r clean_network; do
+        say "Удалено: $clean_network"
+    done < "$network_candidates"
+}
+
+user_target_count() {
+    awk 'END { print NR+0 }' "$USER_LIST" "$USER_IPSET" 2>/dev/null
+}
+
+enabled_ru() {
+    if [ "$1" -eq 1 ]; then
+        printf 'включён'
+    else
+        printf 'выключен'
+    fi
+}
+
+scope_ru() {
+    case "$TRAFFIC_SCOPE" in
+        all) printf 'весь подходящий трафик' ;;
+        list) printf 'только мои домены и сети' ;;
+        auto) printf 'мои цели + автообнаружение доменов' ;;
+        *) printf '%s' "$TRAFFIC_SCOPE" ;;
+    esac
+}
+
+youtube_status_ru() {
+    if [ "$YOUTUBE_PROFILE" = off ]; then
+        if [ "$QUIC_ENABLED" -eq 1 ]; then
+            printf 'TCP выключен; обход QUIC включён'
+        else
+            printf 'выключен'
+        fi
+    elif [ "$QUIC_ENABLED" -eq 1 ]; then
+        printf 'включён (TCP %s; QUIC включён)' "$YOUTUBE_PROFILE"
+    else
+        printf 'включён (TCP %s; QUIC выключен)' "$YOUTUBE_PROFILE"
+    fi
+}
+
+discord_status_ru() {
+    if [ "$DISCORD_ENABLED" -eq 0 ]; then
+        printf 'базовый блок выключен'
+    elif [ "$DISCORD_MEDIA_PROFILE" = off ]; then
+        printf 'голос/STUN включён'
+    else
+        printf 'голос/STUN, media %s' "$DISCORD_MEDIA_PROFILE"
+    fi
+    if [ "$DISCORD_SCRIPT" != off ]; then
+        printf '; дополнительно %s' "$DISCORD_SCRIPT"
+    fi
+}
+
+discord_script_status_ru() {
+    if [ "$DISCORD_SCRIPT" = off ]; then
+        printf 'не установлен'
+    else
+        printf '%s (профиль KZM, один nfqws)' "$DISCORD_SCRIPT"
+    fi
+}
+
+discord_fake_status_ru() {
+    if [ "$DISCORD_FAKE" = off ]; then
+        printf 'встроенный payload nfqws'
+    else
+        printf '%s' "$DISCORD_FAKE"
+    fi
+}
+
+engine_status_ru() {
+    if [ -e "$NFQWS2_INIT" ]; then
+        if [ -x "$NFQWS2_INIT" ] && "$NFQWS2_INIT" status >/dev/null 2>&1; then
+            printf 'nfqws2 запущен; применение zapret1 заблокировано'
+        else
+            printf 'nfqws2 установлен; применение zapret1 заблокировано'
+        fi
+    elif [ -x "$NFQWS_INIT" ] && [ -x "$NFQWS_BIN" ] && [ -f "$NFQWS_CONFIG" ]; then
+        if "$NFQWS_INIT" status >/dev/null 2>&1; then
+            printf 'классический nfqws запущен'
+        else
+            printf 'классический nfqws остановлен'
+        fi
+    else
+        printf 'классический nfqws не установлен'
+    fi
+}
+
+catalog_status_ru() {
+    if [ -s "$CATALOG_DIR/updated_at" ]; then
+        printf '%s' "$(cat "$CATALOG_DIR/updated_at")"
+    else
+        printf 'ещё не загружен'
+    fi
+}
+
+configuration_status_ru() {
+    if [ -e "$NFQWS2_INIT" ]; then
+        printf 'не применяется: установлен nfqws2'
+    elif [ ! -f "$CONFIGURED_STATE" ]; then
+        printf 'ещё не записывалась через KZM'
+    elif ! cmp -s "$STATE_FILE" "$CONFIGURED_STATE" 2>/dev/null; then
+        printf 'есть неприменённые изменения'
+    elif [ -f "$RUNNING_STATE" ] && cmp -s "$CONFIGURED_STATE" "$RUNNING_STATE" 2>/dev/null; then
+        printf 'применена'
+    else
+        printf 'конфиг записан, перезапуск не подтверждён'
+    fi
+}
+
+test_engine_status_ru() {
+    if [ -x "$KZM_CANARY_BIN" ]; then
+        printf 'готов'
+    else
+        printf 'не загружен'
+    fi
+}
+
+live_test_status_ru() {
+    if [ -s /tmp/kzm-router-canary.state ]; then
+        printf 'запущен'
+    else
+        printf 'не запущен'
+    fi
+}
+
+reload_menu_state() {
+    if [ -r "$STATE_FILE" ]; then
+        # shellcheck disable=SC1090
+        . "$STATE_FILE"
+    fi
+}
+
+menu_clear() {
+    if [ -t 1 ] 2>/dev/null && [ -n "${TERM:-}" ] && [ "$TERM" != dumb ] && command -v clear >/dev/null 2>&1; then
+        clear
+    fi
+}
+
+menu_pause() {
+    if [ -t 0 ] 2>/dev/null; then
+        printf '\nНажмите Enter, чтобы продолжить...'
+        IFS= read -r _menu_pause_value || true
+    fi
+}
+
+menu_execute() {
+    ( "$@" )
+    menu_action_rc=$?
+    reload_menu_state
+    if [ "$menu_action_rc" -ne 0 ]; then
+        say "Действие не выполнено. Рабочая конфигурация не менялась."
+    fi
+    menu_pause
+    return 0
+}
+
+menu_confirm() {
+    confirm_prompt=$1
+    while :; do
+        printf '%s\n' "$confirm_prompt"
+        printf '  1) Да\n'
+        printf '  2) Нет\n'
+        printf 'Выберите пункт [2]: '
+        IFS= read -r confirm_answer || confirm_answer=
+        case "$confirm_answer" in
+            1|д|Д|да|Да|ДА|y|Y|yes|YES) return 0 ;;
+            2|0|'') return 1 ;;
+            *) say "Введите 1 или 2." ;;
+        esac
+    done
+}
+
+menu_show_numbered() {
+    numbered_file=$1
+    awk -F'|' '
+        NF >= 2 {
+            label=$0
+            sub(/^[^|]*\|/, "", label)
+            printf "  %d) %s\n", NR, label
+        }
+    ' "$numbered_file"
+}
+
+menu_choose_numbered() {
+    numbered_file=$1
+    numbered_prompt=$2
+    MENU_SELECTED=
+    if [ ! -s "$numbered_file" ]; then
+        say "Нет доступных вариантов."
+        return 1
+    fi
+    while :; do
+        menu_show_numbered "$numbered_file"
+        printf '  Enter) Назад\n\n'
+        printf '%s: ' "$numbered_prompt"
+        IFS= read -r numbered_choice || numbered_choice=
+        case "$numbered_choice" in
+            0|'') return 1 ;;
+            *[!0-9]*) say "Введите номер из списка."; continue ;;
+        esac
+        MENU_SELECTED=$(awk -F'|' -v selected_number="$numbered_choice" 'NR == selected_number { print $1; exit }' "$numbered_file")
+        if [ -n "$MENU_SELECTED" ]; then
+            return 0
+        fi
+        say "Такого номера нет."
+    done
+}
+
+status_command() {
+    ensure_layout
+    validate_state
+    say "Keenetic Zapret Manager $KZM_VERSION"
+    say "  Сайты:       $(general_profile_label)"
+    say "  YouTube:     $(youtube_status_ru)"
+    say "  Discord:     $(discord_status_ru)"
+    say "  Игровой UDP: $(enabled_ru "$GAME_ENABLED")"
+    say "  Охват:       $(scope_ru)"
+    say "  Мои цели:    $(awk 'END { print NR+0 }' "$USER_LIST" 2>/dev/null) доменов; $(awk 'END { print NR+0 }' "$USER_IPSET" 2>/dev/null) IP/подсетей"
+    say "  Движок:      $(engine_status_ru)"
+    say "  Настройки:   $(configuration_status_ru)"
+    say "  Каталог:     $(catalog_status_ru)"
+    say "  Полный тест: $(awk 'END { print NR+0 }' "$TEST_TARGETS" 2>/dev/null) адресов; Flowseal $(count_profiles "$FLOWSEAL_DIR") профилей"
+    say "  Тест-модуль: $(test_engine_status_ru); временный тест: $(live_test_status_ru)"
+}
+
+doctor_command() {
+    failures=0
+    say "Проверка окружения (без изменений и перезапусков):"
+    for required in awk sed grep find sort mktemp cmp unzip; do
+        if command -v "$required" >/dev/null 2>&1; then
+            say "  OK  $required"
+        else
+            say "  FAIL $required"
+            failures=$((failures + 1))
+        fi
+    done
+    if [ -x "$NFQWS_BIN" ] && [ -x "$NFQWS_INIT" ] && [ -f "$NFQWS_CONFIG" ]; then
+        say "  OK  классический nfqws-keenetic"
+    else
+        say "  FAIL классический nfqws-keenetic не установлен полностью"
+        failures=$((failures + 1))
+    fi
+    if [ -e "$NFQWS2_INIT" ]; then
+        say "  WARN установлен конфликтующий nfqws2-keenetic"
+    fi
+    general_count=$(count_profiles "$GENERAL_DIR")
+    flowseal_count=$(count_profiles "$FLOWSEAL_DIR")
+    youtube_count=$(count_profiles "$YOUTUBE_DIR")
+    discord_count=$(count_profiles "$DISCORD_DIR")
+    test_target_count=$(awk 'END { print NR+0 }' "$TEST_TARGETS" 2>/dev/null)
+    say "  INFO стратегии: v=$general_count Flowseal=$flowseal_count youtube=$youtube_count discord=$discord_count"
+    say "  INFO целей полного теста: ${test_target_count:-0}"
+    if [ -f "$YOUTUBE_LIST" ]; then
+        missing_youtube_domains=""
+        for required_youtube_domain in youtube.com googlevideo.com youtubei.googleapis.com youtubei-att.googleapis.com; do
+            if ! grep -qxF "$required_youtube_domain" "$YOUTUBE_LIST" 2>/dev/null; then
+                missing_youtube_domains="$missing_youtube_domains $required_youtube_domain"
+            fi
+        done
+        if [ -n "$missing_youtube_domains" ]; then
+            say "  FAIL в списке YouTube отсутствуют:$missing_youtube_domains"
+            failures=$((failures + 1))
+        else
+            say "  OK  основные домены браузера и приложения YouTube"
+        fi
+    else
+        say "  FAIL не найден список YouTube: $YOUTUBE_LIST"
+        failures=$((failures + 1))
+    fi
+    if command -v ip >/dev/null 2>&1 && ip -6 route show default 2>/dev/null | grep -q .; then
+        ipv6_setting=$(awk -F= '$1 == "IPV6_ENABLED" { print substr($0, index($0, "=") + 1); exit }' "$NFQWS_CONFIG" 2>/dev/null | tr -d '[:space:]"')
+        if [ "$ipv6_setting" = 1 ]; then
+            say "  OK  IPv6-маршрут активен и IPV6_ENABLED=1"
+        else
+            say "  WARN IPv6-маршрут активен, но IPV6_ENABLED не равен 1"
+        fi
+        say "  INFO двухминутный canary телефона проверяет только IPv4"
+    fi
+    [ "$general_count" -gt 0 ] || failures=$((failures + 1))
+    [ "$flowseal_count" -gt 0 ] || failures=$((failures + 1))
+    [ "$discord_count" -gt 0 ] || failures=$((failures + 1))
+    [ "${test_target_count:-0}" -ge 23 ] 2>/dev/null || failures=$((failures + 1))
+    [ "$failures" -eq 0 ]
+}
+
+cleanup_command() {
+    confirmed=${1:-}
+    [ "$confirmed" = "--yes" ] || die "для очистки auto.list добавьте --yes"
+    ensure_layout
+    : > "$AUTO_LIST"
+    rm -f "$KZM_BASE/var/log/kzapret-auto.log" "$KZM_BASE/var/log/kzapret-auto.log.1"
+    say "Очищены auto.list и журналы автодобавления. Каталоги и выбранные стратегии сохранены."
+}
+
+file_size_bytes() {
+    if [ -f "$1" ]; then
+        wc -c < "$1" 2>/dev/null | tr -d '[:space:]'
+    else
+        printf '0'
+    fi
+}
+
+storage_status_command() {
+    mihomo_log_size=$(file_size_bytes "$MIHOMO_LOG")
+    mihomo_old_size=$(file_size_bytes "$MIHOMO_LOG.1")
+    auto_log_size=$(file_size_bytes "$KZM_BASE/var/log/kzapret-auto.log")
+    auto_old_size=$(file_size_bytes "$KZM_BASE/var/log/kzapret-auto.log.1")
+    total_size=$((mihomo_log_size + mihomo_old_size + auto_log_size + auto_old_size))
+    say "Безопасно очищаемые журналы: $total_size байт"
+    say "  Mihomo: $mihomo_log_size байт; архив: $mihomo_old_size байт"
+    say "  KZM auto: $auto_log_size байт; архив: $auto_old_size байт"
+    say "cache.db и файлы web-панели не учитываются: это рабочие данные, а не мусор."
+    say "Кэш самой MetaCubeXD хранится в браузере, а не на флешке роутера."
+}
+
+storage_cleanup_command() {
+    [ "${1:-}" = "--yes" ] || die "для очистки журналов добавьте --yes"
+    case "$MIHOMO_LOG" in
+        "$KZM_BASE"/var/log/*) ;;
+        *) die "MIHOMO_LOG должен находиться внутри $KZM_BASE/var/log" ;;
+    esac
+    before_size=$((
+        $(file_size_bytes "$MIHOMO_LOG") +
+        $(file_size_bytes "$MIHOMO_LOG.1") +
+        $(file_size_bytes "$KZM_BASE/var/log/kzapret-auto.log") +
+        $(file_size_bytes "$KZM_BASE/var/log/kzapret-auto.log.1")
+    ))
+    if [ -f "$MIHOMO_LOG" ]; then
+        : > "$MIHOMO_LOG" || die "не удалось очистить $MIHOMO_LOG"
+    fi
+    rm -f "$MIHOMO_LOG.1"
+    if [ -f "$KZM_BASE/var/log/kzapret-auto.log" ]; then
+        : > "$KZM_BASE/var/log/kzapret-auto.log" || die "не удалось очистить журнал KZM"
+    fi
+    rm -f "$KZM_BASE/var/log/kzapret-auto.log.1"
+    say "Журналы очищены без остановки Mihomo и nfqws. Освобождено до $before_size байт."
+    say "Конфиги, подписки, cache.db, rule-provider и web-панель сохранены."
+}
+
+service_command() {
+    action=${1:-status}
+    case "$action" in
+        status)
+            [ -x "$NFQWS_INIT" ] || die "не найден $NFQWS_INIT"
+            "$NFQWS_INIT" status
+            ;;
+        restart)
+            [ "${2:-}" = "--yes" ] || die "перезапуск может оборвать соединение; добавьте --yes"
+            if restart_service; then
+                if [ -f "$CONFIGURED_STATE" ]; then
+                    cp "$CONFIGURED_STATE" "$RUNNING_STATE.next.$$" && mv "$RUNNING_STATE.next.$$" "$RUNNING_STATE"
+                fi
+                say "Классический nfqws перезапущен."
+            else
+                die "не удалось перезапустить классический nfqws"
+            fi
+            ;;
+        *) die "service поддерживает status или restart --yes" ;;
+    esac
+}
+
+preview_command() {
+    make_tmp
+    render_composition "$KZM_TMP/composed.strategy"
+    cat "$KZM_TMP/composed.strategy"
+}
+
+canary_engine_update() {
+    case "$(uname -m 2>/dev/null)" in
+        aarch64) ;;
+        *) die "автоматическая установка canary-движка пока поддерживает только aarch64" ;;
+    esac
+    ensure_layout
+    make_tmp
+    say "Скачиваю индекс официального nfqws-keenetic..."
+    fetch_url "$CANARY_FEED_URL/Packages.gz" "$KZM_TMP/Packages.gz" || die "не удалось скачать Packages.gz"
+    if command -v gzip >/dev/null 2>&1; then
+        gzip -dc "$KZM_TMP/Packages.gz" > "$KZM_TMP/Packages" || die "не удалось распаковать Packages.gz"
+    elif [ -x /bin/busybox ]; then
+        /bin/busybox gzip -dc "$KZM_TMP/Packages.gz" > "$KZM_TMP/Packages" || die "не удалось распаковать Packages.gz"
+    else
+        die "не найден gzip"
+    fi
+    package_filename=$(awk '
+        $0 == "Package: nfqws-keenetic" { found=1; next }
+        found && /^Filename: / { print $2; exit }
+        found && /^$/ { exit }
+    ' "$KZM_TMP/Packages")
+    package_sha256=$(awk '
+        $0 == "Package: nfqws-keenetic" { found=1; next }
+        found && /^SHA256sum: / { print $2; exit }
+        found && /^$/ { exit }
+    ' "$KZM_TMP/Packages")
+    package_version=$(awk '
+        $0 == "Package: nfqws-keenetic" { found=1; next }
+        found && /^Version: / { print $2; exit }
+        found && /^$/ { exit }
+    ' "$KZM_TMP/Packages")
+    case "$package_filename" in
+        nfqws-keenetic_*.ipk) ;;
+        *) die "в индексе нет безопасного имени пакета nfqws-keenetic" ;;
+    esac
+    case "$package_filename" in *[!A-Za-z0-9_.-]*) die "имя пакета содержит запрещённые символы" ;; esac
+    case "$package_sha256" in
+        [0-9a-fA-F][0-9a-fA-F]*) ;;
+        *) die "в индексе нет SHA256 пакета" ;;
+    esac
+    [ "${#package_sha256}" -eq 64 ] || die "длина SHA256 пакета некорректна"
+    fetch_url "$CANARY_FEED_URL/$package_filename" "$KZM_TMP/$package_filename" || die "не удалось скачать $package_filename"
+    actual_sha256=$(sha256sum "$KZM_TMP/$package_filename" | awk '{ print $1 }')
+    [ "$actual_sha256" = "$package_sha256" ] || die "SHA256 пакета nfqws не совпал"
+
+    mkdir -p "$KZM_TMP/package" || die "не удалось создать каталог распаковки"
+    (
+        cd "$KZM_TMP/package" || exit 1
+        tar -xzf "$KZM_TMP/$package_filename" || exit 1
+        [ -f data.tar.gz ] || exit 1
+        tar -xzf data.tar.gz || exit 1
+        [ -x opt/usr/bin/nfqws ] || exit 1
+    ) || die "не удалось безопасно извлечь nfqws из ipk"
+    "$KZM_TMP/package/opt/usr/bin/nfqws" --version >/dev/null 2>&1 || die "извлечённый nfqws не запускается"
+    cp "$KZM_TMP/package/opt/usr/bin/nfqws" "$KZM_CANARY_BIN.next" || die "не удалось подготовить canary-движок"
+    chmod 755 "$KZM_CANARY_BIN.next" || die "не удалось выставить права canary-движка"
+    mv "$KZM_CANARY_BIN.next" "$KZM_CANARY_BIN" || die "не удалось установить canary-движок"
+    printf 'package=%s\nversion=%s\nsha256=%s\n' "$package_filename" "$package_version" "$package_sha256" > "$TOOLS_DIR/nfqws.source"
+    say "Canary nfqws $package_version извлечён в $KZM_CANARY_BIN. Пакет не устанавливался, службы не запускались."
+}
+
+canary_live_require() {
+    ensure_layout
+    [ -x "$KZM_CANARY_BIN" ] || die "нет изолированного nfqws; выполните: kzm test engine-update"
+    [ -x "$KZM_LIBEXEC/router-canary.sh" ] || die "не найден router-canary.sh; переустановите менеджер"
+    command -v iptables >/dev/null 2>&1 || die "для live-теста нужен iptables"
+    [ -r /proc/net/netfilter/nfnetlink_queue ] || die "ядро не предоставляет NFQUEUE"
+    iptables -t mangle -nL POSTROUTING >/dev/null 2>&1 || die "не найдена mangle-цепочка POSTROUTING для временного теста"
+}
+
+canary_require() {
+    canary_live_require
+    [ -x "$KZM_LIBEXEC/router-canary-matrix.sh" ] || die "не найден router-canary-matrix.sh; переустановите менеджер"
+    command -v curl >/dev/null 2>&1 || die "для HTTP-тестов нужен curl: opkg install curl"
+}
+
+ipv4_valid() {
+    printf '%s\n' "$1" | awk -F. '
+        NF != 4 { exit 1 }
+        { for (i=1; i<=4; i++) if ($i !~ /^[0-9]+$/ || $i < 0 || $i > 255) exit 1 }
+    '
+}
+
+canary_ttl_valid() {
+    case "$1" in
+        ''|*[!0-9]*) return 1 ;;
+    esac
+    [ "$1" -ge 15 ] 2>/dev/null && [ "$1" -le 300 ] 2>/dev/null
+}
+
+youtube_profile_valid() {
+    youtube_profile_suffix=${1#Yv}
+    [ "$youtube_profile_suffix" != "$1" ] || return 1
+    case "$youtube_profile_suffix" in
+        ''|*[!0-9]*) return 1 ;;
+        *) return 0 ;;
+    esac
+}
+
+resolve_ipv4() {
+    resolve_host=$1
+    nslookup "$resolve_host" 2>/dev/null | awk '
+        /^Name:/ { answer=1; next }
+        answer && /^Address/ {
+            ip=$NF
+            if (ip ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/) { print ip; exit }
+        }
+    '
+}
+
+route_source_ipv4() {
+    ip route get "$1" 2>/dev/null | awk '
+        { for (i=1; i<=NF; i++) if ($i == "src") { print $(i+1); exit } }
+    '
+}
+
+run_canary_general_matrix() {
+    CANARY_SCRIPT="$KZM_LIBEXEC/router-canary.sh" \
+    NFQWS_BIN="$KZM_CANARY_BIN" \
+    CONTROL_STRATEGY="$KZM_SHARE/canary-pass.strategy" \
+    STRATEGY_DIR="$test_strategy_dir" \
+    TEST_LOCAL_IP="$test_local_ip" \
+    TEST_REMOTE_IP="$test_remote_ip" \
+    TEST_HOST="$test_host" \
+    TEST_PATH="$test_path" \
+    TEST_PORT=443 \
+    QUEUE_NUM="$CANARY_QUEUE_NUM" \
+    CURL_TIMEOUT=6 \
+    ATTEMPTS=2 \
+    "$KZM_LIBEXEC/router-canary-matrix.sh"
+}
+
+canary_general_test() {
+    test_host=${1:-discord.com}
+    test_path=${2:-/api/v9/experiments}
+    test_profile=${3:-all}
+    test_host=$(normalize_domain "$test_host")
+    domain_valid "$test_host" || die "некорректный тестовый домен"
+    case "$test_path" in /*) ;; *) die "путь теста должен начинаться с /" ;; esac
+    canary_require
+    [ -f "$KZM_SHARE/canary-pass.strategy" ] || die "не найден canary-pass.strategy"
+    [ "$(count_profiles "$GENERAL_DIR")" -gt 0 ] || die "каталог пуст; выполните: kzm update"
+    test_remote_ip=$(resolve_ipv4 "$test_host")
+    ipv4_valid "$test_remote_ip" || die "не удалось получить IPv4 для $test_host"
+    test_local_ip=$(route_source_ipv4 "$test_remote_ip")
+    ipv4_valid "$test_local_ip" || die "не удалось определить исходящий IPv4"
+    test_strategy_dir="$GENERAL_DIR"
+    case "$test_profile" in
+        all) ;;
+        current)
+            current_profile_file=$(profile_file_general)
+            [ -f "$current_profile_file" ] || die "нет выбранной стратегии $GENERAL_PROFILE; выполните: kzm update"
+            validate_strategy "$current_profile_file" || die "выбранная стратегия повреждена"
+            make_tmp
+            mkdir -p "$KZM_TMP/current-strategy" || die "не удалось подготовить текущую стратегию для теста"
+            cp "$current_profile_file" "$KZM_TMP/current-strategy/current.strategy" || die "не удалось подготовить текущую стратегию для теста"
+            test_strategy_dir="$KZM_TMP/current-strategy"
+            ;;
+        *) die "режим теста должен быть all или current" ;;
+    esac
+    say "Canary: $test_host ($test_remote_ip), источник $test_local_ip, очередь $CANARY_QUEUE_NUM."
+    if [ "$test_profile" = current ]; then
+        say "Сначала контроль без обхода, затем выбранная стратегия $GENERAL_PROFILE."
+    else
+        say "Сначала контроль без обхода, затем все v-профили."
+    fi
+    say "Рабочая очередь не меняется; у каждой попытки есть queue-bypass и TTL 30 секунд."
+    if [ -n "${KZM_TEST_RESULT_FILE:-}" ]; then
+        run_canary_general_matrix > "$KZM_TEST_RESULT_FILE"
+    else
+        run_canary_general_matrix
+    fi
+}
+
+canary_suite_require() {
+    canary_require
+    [ -x "$KZM_LIBEXEC/router-canary-suite.sh" ] || die "не найден router-canary-suite.sh; переустановите менеджер"
+    [ -r "$KZM_SHARE/test-targets.base.tsv" ] || die "не найден базовый список тестов; переустановите менеджер"
+}
+
+append_v_test_index() {
+    test_index_target=$1
+    find "$GENERAL_DIR" -type f -name 'v*.strategy' 2>/dev/null | \
+        sed 's#.*/v##; s/\.strategy$//' | sort -n > "$KZM_TMP/test-v.ids"
+    while IFS= read -r test_v_number; do
+        [ -n "$test_v_number" ] || continue
+        test_v_id="v$test_v_number"
+        test_v_path="$GENERAL_DIR/$test_v_id.strategy"
+        [ -f "$test_v_path" ] || continue
+        validate_strategy "$test_v_path" || die "повреждена стратегия $test_v_id"
+        printf '%s|%s|%s\n' "$test_v_id" "$test_v_id" "$test_v_path" >> "$test_index_target"
+    done < "$KZM_TMP/test-v.ids"
+}
+
+append_flowseal_test_index() {
+    test_index_target=$1
+    [ -s "$FLOWSEAL_DIR/index.tsv" ] || die "каталог Flowseal пуст; выполните: kzm update"
+    while IFS='|' read -r test_flow_id test_flow_label; do
+        if [ -z "$test_flow_id" ] || [ -z "$test_flow_label" ]; then
+            continue
+        fi
+        test_flow_path="$FLOWSEAL_DIR/$test_flow_id.strategy"
+        [ -f "$test_flow_path" ] || die "нет Flowseal-профиля $test_flow_id"
+        validate_strategy "$test_flow_path" || die "повреждён Flowseal-профиль $test_flow_label"
+        printf 'flow:%s|%s|%s\n' "$test_flow_id" "$test_flow_label" "$test_flow_path" >> "$test_index_target"
+    done < "$FLOWSEAL_DIR/index.tsv"
+}
+
+build_strategy_test_index() {
+    test_set=$1
+    test_index_target=$2
+    : > "$test_index_target"
+    case "$test_set" in
+        current)
+            test_current_path=$(profile_file_general)
+            [ -f "$test_current_path" ] || die "нет выбранной стратегии $GENERAL_PROFILE; выполните: kzm update"
+            validate_strategy "$test_current_path" || die "выбранная стратегия повреждена"
+            printf '%s|%s|%s\n' "$GENERAL_PROFILE" "$(general_profile_label)" "$test_current_path" >> "$test_index_target"
+            ;;
+        v)
+            append_v_test_index "$test_index_target"
+            ;;
+        flowseal)
+            append_flowseal_test_index "$test_index_target"
+            ;;
+        all)
+            # This order matches Zapret Manager: Flowseal first, then v-profiles.
+            append_flowseal_test_index "$test_index_target"
+            append_v_test_index "$test_index_target"
+            ;;
+        *) die "набор теста: current, v, flowseal или all" ;;
+    esac
+    [ -s "$test_index_target" ] || die "в выбранном наборе нет стратегий"
+}
+
+run_canary_suite_test() {
+    test_set=$1
+    test_targets_file=$2
+    test_title=$3
+    canary_suite_require
+    validate_test_targets "$test_targets_file" 1 || die "список тестовых адресов повреждён"
+    make_tmp
+    build_strategy_test_index "$test_set" "$KZM_TMP/strategy-index.tsv"
+    test_local_ip=$(route_source_ipv4 1.1.1.1)
+    ipv4_valid "$test_local_ip" || die "не удалось определить исходящий IPv4 роутера"
+    result_next="$LAST_TEST_RESULT.next.$$"
+    rm -f "$result_next"
+    say "Проверка: $test_title"
+    say "Тестируется только HTTPS самого роутера; клиентский трафик и рабочая очередь не переключаются."
+    if CANARY_SCRIPT="$KZM_LIBEXEC/router-canary.sh" \
+        NFQWS_BIN="$KZM_CANARY_BIN" \
+        CONTROL_STRATEGY="$KZM_SHARE/canary-pass.strategy" \
+        STRATEGY_INDEX="$KZM_TMP/strategy-index.tsv" \
+        TARGET_FILE="$test_targets_file" \
+        RESULT_FILE="$result_next" \
+        TEST_LOCAL_IP="$test_local_ip" \
+        QUEUE_NUM="$CANARY_QUEUE_NUM" \
+        PARALLEL=8 \
+        CURL_TIMEOUT=7 \
+        CANARY_TTL=120 \
+        "$KZM_LIBEXEC/router-canary-suite.sh"; then
+        grep -q '^strategy_id|strategy_label|target|ok|curl_rc|http_code|bytes|seconds|queue_packets$' "$result_next" || {
+            rm -f "$result_next"
+            warn "полный тест вернул некорректный результат"
+            return 1
+        }
+        mv "$result_next" "$LAST_TEST_RESULT" || die "не удалось сохранить результат теста"
+        printf '%s; %s\n' "$test_title" "$(date '+%Y-%m-%d %H:%M:%S')" > "$LAST_TEST_META.next.$$"
+        mv "$LAST_TEST_META.next.$$" "$LAST_TEST_META" || die "не удалось сохранить описание теста"
+    else
+        rm -f "$result_next"
+        return 1
+    fi
+}
+
+canary_live_start() {
+    test_kind=$1
+    test_client_ip=$2
+    test_ttl=${3:-120}
+    ipv4_valid "$test_client_ip" || die "некорректный IPv4 клиента"
+    canary_ttl_valid "$test_ttl" || die "TTL live-теста должен быть числом от 15 до 300 секунд"
+    canary_live_require
+    case "$test_kind" in
+        voice)
+            [ -f "$EXTRAS_DIR/discord-voice.strategy" ] || die "нет Discord voice-профиля; выполните: kzm update"
+            make_tmp
+            render_discord_voice_strategy "$EXTRAS_DIR/discord-voice.strategy" "$KZM_TMP/discord-voice-canary.strategy"
+            validate_strategy "$KZM_TMP/discord-voice-canary.strategy" || die "повреждён Discord voice-профиль"
+            test_strategy="$KZM_TMP/discord-voice-canary.strategy"
+            test_ports='19294:19344,50000:50100'
+            say "Canary использует выбранный fake: $(discord_fake_status_ru)"
+            ;;
+        quic)
+            make_tmp
+            render_quic_strategy "$KZM_TMP/quic-canary.strategy"
+            test_strategy="$KZM_TMP/quic-canary.strategy"
+            test_ports=443
+            say "Тест: IPv4 $test_client_ip, UDP/443, ${test_ttl} с; без apply/restart, с автооткатом."
+            if router_has_ipv6_default_route; then
+                warn "IPv6 активен и не входит в canary: нулевой IPv4-счётчик неубедителен"
+            else
+                warn "IPv6 не входит в canary; нулевой IPv4-счётчик не доказывает, что стратегия не работает"
+            fi
+            if router_mihomo_running; then
+                warn "Mihomo запущен: его перехват/REJECT UDP/443 до POSTROUTING даст нулевой счётчик"
+            else
+                warn "перехват/REJECT UDP/443 в Mihomo до POSTROUTING также даст нулевой счётчик"
+            fi
+            ;;
+        *) die "live-тест поддерживает voice или quic" ;;
+    esac
+    NFQWS_BIN="$KZM_CANARY_BIN" \
+    STRATEGY_FILE="$test_strategy" \
+    TEST_LOCAL_IP="$test_client_ip" \
+    TEST_REMOTE_IP=0.0.0.0/0 \
+    TEST_PROTOCOL=udp \
+    TEST_PORTS="$test_ports" \
+    INBOUND_ENABLED=0 \
+    QUEUE_NUM="$CANARY_QUEUE_NUM" \
+    TTL="$test_ttl" \
+    "$KZM_LIBEXEC/router-canary.sh" start
+    case "$test_kind" in
+        voice) say "Выйдите и снова войдите в Discord ГС, затем проверьте: kzm test status" ;;
+        quic) say "Оставьте на телефоне только Wi-Fi, отключите VPN, принудительно закройте YouTube, откройте его заново и запустите новое видео; затем: kzm test status" ;;
+    esac
+}
+
+canary_youtube_live_start() {
+    test_client_ip=$1
+    test_youtube_profile=$2
+    test_ttl=${3:-120}
+    ipv4_valid "$test_client_ip" || die "некорректный IPv4 клиента"
+    youtube_profile_valid "$test_youtube_profile" || die "ожидается YouTube-профиль YvNN"
+    canary_ttl_valid "$test_ttl" || die "TTL live-теста должен быть числом от 15 до 300 секунд"
+    ensure_layout
+    canary_live_require
+
+    test_strategy="$YOUTUBE_DIR/$test_youtube_profile.strategy"
+    [ -f "$test_strategy" ] || die "YouTube-профиль $test_youtube_profile не найден; выполните: kzm update"
+    validate_strategy "$test_strategy" || die "повреждён YouTube-профиль $test_youtube_profile"
+    if ! awk '
+        /^--filter-tcp=([0-9,:]*,)?443(,[0-9,:]*)?$/ { found=1 }
+        END { exit found ? 0 : 1 }
+    ' "$test_strategy"; then
+        die "профиль $test_youtube_profile не содержит TCP/443 и не подходит для этого live-теста"
+    fi
+
+    test_mihomo_bypass=0
+    if router_mihomo_transparent_running; then
+        test_mihomo_bypass=1
+        say "Обнаружен прозрачный Mihomo: для устройства временно обходится только MIHOMO_REDIRECT TCP/443."
+    elif router_mihomo_running; then
+        warn "Mihomo запущен, но поддерживаемая цепочка MIHOMO_REDIRECT не найдена; его перехват может дать нулевой счётчик"
+    fi
+
+    say "Тест: IPv4 $test_client_ip, профиль $test_youtube_profile, TCP/443, ${test_ttl} с."
+    say "Основной nfqws и конфиг не меняются; тест идёт без apply/restart, откат — автоматически по TTL."
+    CANARY_MIHOMO_BYPASS="$test_mihomo_bypass" \
+    NFQWS_BIN="$KZM_CANARY_BIN" \
+    STRATEGY_FILE="$test_strategy" \
+    TEST_LOCAL_IP="$test_client_ip" \
+    TEST_REMOTE_IP=0.0.0.0/0 \
+    TEST_PROTOCOL=tcp \
+    TEST_PORTS=443 \
+    INBOUND_ENABLED=0 \
+    QUEUE_NUM="$CANARY_QUEUE_NUM" \
+    TTL="$test_ttl" \
+    "$KZM_LIBEXEC/router-canary.sh" start
+    say "На телефоне оставьте Wi-Fi без VPN, принудительно закройте YouTube, откройте заново и запустите новое видео; затем: kzm test status"
+}
+
+canary_status() {
+    [ -x "$KZM_LIBEXEC/router-canary.sh" ] || die "не найден router-canary.sh"
+    canary_status_rc=0
+    "$KZM_LIBEXEC/router-canary.sh" status || canary_status_rc=$?
+    if [ "$canary_status_rc" -eq 0 ]; then
+        say "Как читать: pkts > 0 — IPv4-трафик дошёл до canary, но это ещё не доказывает совпадение домена или успешный обход; pkts = 0 — проверьте IP устройства, IPv6, VPN/мобильную сеть и Mihomo."
+        say "Автооткат — по TTL; немедленный — kzm test stop."
+    fi
+    return "$canary_status_rc"
+}
+
+canary_stop() {
+    [ -x "$KZM_LIBEXEC/router-canary.sh" ] || die "не найден router-canary.sh"
+    "$KZM_LIBEXEC/router-canary.sh" stop
+}
+
+build_domain_targets() {
+    domain_target_file=$1
+    shift
+    [ "$#" -gt 0 ] || die "укажите хотя бы один домен"
+    : > "$domain_target_file"
+    domain_target_count=0
+    for raw_test_domain in "$@"; do
+        clean_test_domain=$(normalize_domain "$raw_test_domain")
+        domain_valid "$clean_test_domain" || die "некорректный тестовый домен: $raw_test_domain"
+        if ! awk -F'|' -v name="$clean_test_domain" '$1 == name { found=1 } END { exit found ? 0 : 1 }' "$domain_target_file"; then
+            printf '%s|https://%s/\n' "$clean_test_domain" "$clean_test_domain" >> "$domain_target_file"
+            domain_target_count=$((domain_target_count + 1))
+        fi
+        [ "$domain_target_count" -le 25 ] || die "за один запуск можно проверить не больше 25 доменов"
+    done
+}
+
+canary_domain_suite_test() {
+    select_tmp_base
+    domain_tmp=$(mktemp "$KZM_TMP_BASE/kzm-domains.XXXXXX") || die "не удалось создать временный список доменов"
+    trap 'rm -f "$domain_tmp"; cleanup_tmp' 0
+    trap 'exit 129' HUP
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    build_domain_targets "$domain_tmp" "$@"
+    domain_count=$(awk 'END { print NR+0 }' "$domain_tmp")
+    run_canary_suite_test all "$domain_tmp" "v + Flowseal на пользовательских доменах ($domain_count)"
+    rm -f "$domain_tmp"
+    trap cleanup_tmp 0
+}
+
+canary_test_command() {
+    test_command=${1:-status}
+    [ "$#" -eq 0 ] || shift
+    case "$test_command" in
+        engine-update) canary_engine_update ;;
+        general) canary_general_test "${1:-discord.com}" "${2:-/api/v9/experiments}" ;;
+        suite)
+            suite_set=${1:-current}
+            case "$suite_set" in current|v|flowseal|all) ;; *) die "suite: current, v, flowseal или all" ;; esac
+            run_canary_suite_test "$suite_set" "$TEST_TARGETS" "полный список, набор $suite_set"
+            show_strategy_test_results "$LAST_TEST_RESULT"
+            ;;
+        domain)
+            [ "$#" -gt 0 ] || die "используйте: kzm test domain DOMAIN..."
+            canary_domain_suite_test "$@"
+            show_strategy_test_results "$LAST_TEST_RESULT"
+            ;;
+        voice)
+            [ "${1:-}" = start ] || die "используйте: kzm test voice start CLIENT_IP [TTL]"
+            [ -n "${2:-}" ] || die "укажите IPv4 клиента"
+            canary_live_start voice "$2" "${3:-120}"
+            ;;
+        quic)
+            [ "${1:-}" = start ] || die "используйте: kzm test quic start CLIENT_IP [TTL]"
+            [ -n "${2:-}" ] || die "укажите IPv4 клиента"
+            canary_live_start quic "$2" "${3:-120}"
+            ;;
+        youtube)
+            [ "${1:-}" = start ] || die "используйте: kzm test youtube start CLIENT_IP PROFILE [TTL]"
+            [ -n "${2:-}" ] || die "укажите IPv4 клиента"
+            [ -n "${3:-}" ] || die "укажите YouTube-профиль YvNN"
+            canary_youtube_live_start "$2" "$3" "${4:-120}"
+            ;;
+        status) canary_status ;;
+        stop) canary_stop ;;
+        *) die "test: engine-update, suite [current|v|flowseal|all], domain DOMAIN..., general [HOST PATH], voice/quic/youtube, status или stop" ;;
+    esac
+}
+
+ensure_test_engine_interactive() {
+    [ -x "$KZM_CANARY_BIN" ] && return 0
+    say "Для проверки нужен отдельный тестовый nfqws. Он не заменяет установленный движок и не запускается постоянно."
+    if ! menu_confirm "Скачать его из официального репозитория nfqws-keenetic?"; then
+        say "Загрузка отменена."
+        return 1
+    fi
+    canary_engine_update
+}
+
+show_legacy_strategy_test_results() {
+    result_file=${1:-$LAST_TEST_RESULT}
+    [ -s "$result_file" ] || {
+        say "Сохранённых результатов пока нет."
+        return 1
+    }
+    grep -q '^strategy,attempt,curl_rc,http_code,tls_seconds,total_seconds,queue_packets$' "$result_file" || {
+        warn "файл результатов повреждён"
+        return 1
+    }
+    if [ -s "$LAST_TEST_META" ]; then
+        say "Последняя проверка: $(cat "$LAST_TEST_META")"
+    else
+        say "Результаты последней проверки:"
+    fi
+    awk -F, -v current_profile="$GENERAL_PROFILE" '
+        NR == 1 { next }
+        NF >= 7 {
+            name=$1
+            if (!(name in seen)) { seen[name]=1; order[++count]=name }
+            total[name]++
+            if ($3 == "0" && $4 != "000") ok[name]++
+            seconds[name]+=$6
+            packets[name]+=$7
+        }
+        END {
+            for (i=1; i<=count; i++) {
+                name=order[i]
+                label=name
+                if (name == "control") label="без обхода"
+                if (name == "current") label="текущая (" current_profile ")"
+                if (ok[name] == total[name]) status="РАБОТАЕТ"
+                else if (ok[name] > 0) status="НЕСТАБИЛЬНО"
+                else status="НЕ РАБОТАЕТ"
+                average=total[name] ? seconds[name]/total[name] : 0
+                printf "  %-18s %-13s %d/%d, %.2f с, пакетов: %d\n", label, status, ok[name]+0, total[name], average, packets[name]+0
+            }
+        }
+    ' "$result_file"
+    control_counts=$(awk -F, '
+        NR > 1 && $1 == "control" { total++; if ($3 == "0" && $4 != "000") ok++ }
+        END { printf "%d:%d", ok+0, total+0 }
+    ' "$result_file")
+    control_ok=${control_counts%%:*}
+    control_total=${control_counts#*:}
+    if [ "$control_total" -gt 0 ] && [ "$control_ok" -eq "$control_total" ]; then
+        say "Вывод: адрес доступен и без обхода. По этому тесту выбирать новую стратегию не нужно."
+    elif [ "$control_ok" -eq 0 ] && [ "$control_total" -gt 0 ]; then
+        say "Вывод: без обхода адрес недоступен; рабочие строки действительно показывают обход."
+    else
+        say "Вывод: контроль нестабилен, поэтому результат лучше повторить позже."
+    fi
+}
+
+show_suite_strategy_test_results() {
+    result_file=$1
+    if [ -s "$LAST_TEST_META" ]; then
+        say "Последняя проверка: $(cat "$LAST_TEST_META")"
+    else
+        say "Результаты последней проверки:"
+    fi
+    awk -F'|' '
+        NR == 1 { next }
+        NF >= 9 && $1 == "control" {
+            control[$3]=$4+0
+            control_ok+=$4
+            control_total++
+            if ($9+0 > control_packets) control_packets=$9+0
+            next
+        }
+        NF >= 9 {
+            id=$1
+            if (!(id in seen)) {
+                seen[id]=1
+                order[++count]=id
+                label[id]=$2
+            }
+            total[id]++
+            ok[id]+=$4
+            seconds[id]+=$8
+            if ($9+0 > packets[id]) packets[id]=$9+0
+            if (($4+0) == 1 && control[$3] == 0) rescued[id]++
+            if (($4+0) == 0 && control[$3] == 1) regressions[id]++
+        }
+        END {
+            printf "Контроль без обхода: %d/%d\n", control_ok+0, control_total+0
+            if (control_packets == 0) {
+                print "  ВНИМАНИЕ: контроль не прошёл через временную очередь; весь результат недостоверен."
+            }
+            print ""
+            print "Стратегии по числу доступных целей, от меньшего к большему:"
+            print "  плюс — открыла недоступное в контроле, минус — сломала доступное"
+            for (i=1; i<count; i++) {
+                for (j=i+1; j<=count; j++) {
+                    left=order[i]
+                    right=order[j]
+                    if ((ok[left]+0) > (ok[right]+0)) {
+                        swap=order[i]
+                        order[i]=order[j]
+                        order[j]=swap
+                    }
+                }
+            }
+            for (i=1; i<=count; i++) {
+                id=order[i]
+                if (packets[id] == 0) {
+                    status="НЕДОСТОВЕРНО"
+                } else if (regressions[id] == 0 && rescued[id] > 0) {
+                    status="ПОДХОДИТ"
+                } else if (rescued[id] > 0) {
+                    status="С КОМПРОМИССОМ"
+                } else {
+                    status="БЕЗ УЛУЧШЕНИЯ"
+                }
+                printf "  %-34s %3d/%-3d  +%d/-%d  %s\n", label[id], ok[id]+0, total[id]+0, rescued[id]+0, regressions[id]+0, status
+            }
+        }
+    ' "$result_file"
+    say ""
+    say "FAIL не всегда означает блокировку: адрес мог временно не отвечать. Для выбора важнее +/− относительно контроля."
+}
+
+show_strategy_test_results() {
+    result_file=${1:-$LAST_TEST_RESULT}
+    [ -s "$result_file" ] || {
+        say "Сохранённых результатов пока нет."
+        return 1
+    }
+    result_header=$(sed -n '1p' "$result_file")
+    case "$result_header" in
+        'strategy_id|strategy_label|target|ok|curl_rc|http_code|bytes|seconds|queue_packets')
+            show_suite_strategy_test_results "$result_file"
+            ;;
+        'strategy,attempt,curl_rc,http_code,tls_seconds,total_seconds,queue_packets')
+            show_legacy_strategy_test_results "$result_file"
+            ;;
+        *)
+            warn "файл результатов повреждён или имеет неизвестный формат"
+            return 1
+            ;;
+    esac
+}
+
+recommended_legacy_profile_from_results() {
+    result_file=$1
+    awk -F, -v current="$GENERAL_PROFILE" '
+        NR == 1 || $1 == "control" || $1 == "current" { next }
+        NF >= 7 {
+            total[$1]++
+            if ($3 == "0" && $4 != "000") ok[$1]++
+            seconds[$1]+=$6
+        }
+        END {
+            if (total[current] > 0 && ok[current] == total[current]) {
+                print current
+                exit
+            }
+            for (name in total) {
+                if (ok[name] != total[name]) continue
+                average=seconds[name]/total[name]
+                if (best == "" || average < best_time) {
+                    best=name
+                    best_time=average
+                }
+            }
+            if (best != "") print best
+        }
+    ' "$result_file"
+}
+
+recommended_profile_from_results() {
+    result_file=$1
+    result_header=$(sed -n '1p' "$result_file")
+    if [ "$result_header" = 'strategy,attempt,curl_rc,http_code,tls_seconds,total_seconds,queue_packets' ]; then
+        recommended_legacy_profile_from_results "$result_file"
+        return
+    fi
+    [ "$result_header" = 'strategy_id|strategy_label|target|ok|curl_rc|http_code|bytes|seconds|queue_packets' ] || return
+    awk -F'|' -v current="$GENERAL_PROFILE" '
+        NR == 1 { next }
+        $1 == "control" {
+            control[$3]=$4+0
+            if ($9+0 > control_packets) control_packets=$9+0
+            next
+        }
+        NF >= 9 {
+            id=$1
+            if (!(id in seen)) { seen[id]=1; order[++count]=id }
+            ok[id]+=$4
+            seconds[id]+=$8
+            if ($9+0 > packets[id]) packets[id]=$9+0
+            if (($4+0) == 1 && control[$3] == 0) rescued[id]++
+            if (($4+0) == 0 && control[$3] == 1) regressions[id]++
+        }
+        END {
+            if (control_packets == 0) exit
+            for (i=1; i<=count; i++) {
+                id=order[i]
+                if (packets[id] == 0 || regressions[id] != 0 || rescued[id] == 0) continue
+                prefer_current=(id == current ? 1 : 0)
+                if (best == "" || rescued[id] > best_rescued ||
+                    (rescued[id] == best_rescued && ok[id] > best_ok) ||
+                    (rescued[id] == best_rescued && ok[id] == best_ok && prefer_current > best_current) ||
+                    (rescued[id] == best_rescued && ok[id] == best_ok && prefer_current == best_current && seconds[id] < best_seconds)) {
+                    best=id
+                    best_rescued=rescued[id]
+                    best_ok=ok[id]
+                    best_current=prefer_current
+                    best_seconds=seconds[id]
+                }
+            }
+            if (best != "") print best
+        }
+    ' "$result_file"
+}
+
+run_strategy_test_interactive() {
+    test_mode=$1
+    ensure_layout
+    ensure_test_engine_interactive || return 1
+    recommend_after_test=0
+    case "$test_mode" in
+        all)
+            validate_test_targets "$TEST_TARGETS" || {
+                say "Полный список тестов ещё не загружен. Выполните пункт обновления каталога."
+                return 1
+            }
+            test_target_count=$(awk 'END { print NR+0 }' "$TEST_TARGETS")
+            test_strategy_count=$(( $(count_profiles "$GENERAL_DIR") + $(count_profiles "$FLOWSEAL_DIR") ))
+            say "Будут проверены $test_strategy_count стратегий на $test_target_count адресах. Это долгий тест."
+            say "Основной Zapret не останавливается; проверка идёт через отдельную очередь $CANARY_QUEUE_NUM."
+            menu_confirm "Начать полный автоподбор?" || {
+                say "Тест отменён."
+                return 0
+            }
+            test_title="полный автоподбор v + Flowseal ($test_target_count целей)"
+            run_canary_suite_test all "$TEST_TARGETS" "$test_title" || return 1
+            recommend_after_test=1
+            ;;
+        current)
+            validate_test_targets "$TEST_TARGETS" || {
+                say "Полный список тестов ещё не загружен. Выполните пункт обновления каталога."
+                return 1
+            }
+            test_target_count=$(awk 'END { print NR+0 }' "$TEST_TARGETS")
+            test_title="текущая стратегия $(general_profile_label), $test_target_count целей"
+            run_canary_suite_test current "$TEST_TARGETS" "$test_title" || return 1
+            ;;
+        domain)
+            printf 'Один или несколько доменов через пробел: '
+            IFS= read -r test_domains_input || test_domains_input=
+            [ -n "$test_domains_input" ] || {
+                say "Домены не указаны."
+                return 1
+            }
+            set -f
+            # Word splitting is intentional; glob expansion is disabled above.
+            # shellcheck disable=SC2086
+            set -- $test_domains_input
+            set +f
+            canary_domain_suite_test "$@" || return 1
+            recommend_after_test=1
+            ;;
+        *) die "неизвестный интерактивный режим теста" ;;
+    esac
+    say ""
+    show_strategy_test_results "$LAST_TEST_RESULT"
+    [ "$recommend_after_test" -eq 1 ] || return 0
+    recommended_profile=$(recommended_profile_from_results "$LAST_TEST_RESULT")
+    [ -n "$recommended_profile" ] || {
+        say "Безопасной рекомендации нет: ни одна стратегия не улучшила контроль без регрессий. Выбор не изменён."
+        return 0
+    }
+    if [ "$recommended_profile" = "$GENERAL_PROFILE" ]; then
+        say "Текущая стратегия $(general_profile_label) остаётся лучшим безопасным вариантом."
+        return 0
+    fi
+    say "Рекомендация: $recommended_profile. Это изменит только выбор в KZM, без записи конфига и перезапуска."
+    if menu_confirm "Выбрать $recommended_profile?"; then
+        select_general "$recommended_profile"
+    else
+        say "Текущий выбор $(general_profile_label) сохранён."
+    fi
+}
+
+detect_ssh_client_ip() {
+    printf '%s\n' "${SSH_CLIENT:-}" | awk '{ print $1 }'
+}
+
+router_has_ipv6_default_route() {
+    # A test root must not inspect the host running the local test suite.
+    [ -z "$KZM_ROOT" ] || return 1
+    command -v ip >/dev/null 2>&1 || return 1
+    ip -6 route show default 2>/dev/null | grep -q '^[[:space:]]*default[[:space:]]'
+}
+
+router_mihomo_running() {
+    # Read /proc directly so the diagnostic cannot match its own grep/awk.
+    [ -z "$KZM_ROOT" ] || return 1
+    for mihomo_comm_file in /proc/[0-9]*/comm; do
+        [ -r "$mihomo_comm_file" ] || continue
+        mihomo_process_name=$(sed -n '1p' "$mihomo_comm_file" 2>/dev/null)
+        [ "$mihomo_process_name" = mihomo ] && return 0
+    done
+    return 1
+}
+
+router_mihomo_transparent_running() {
+    # Local tests may emulate the exact supported topology without inspecting
+    # or changing the host firewall. This hook is ignored on a real router.
+    if [ -n "$KZM_ROOT" ]; then
+        [ "${KZM_TEST_MIHOMO_TRANSPARENT:-0}" = 1 ]
+        return
+    fi
+    command -v iptables >/dev/null 2>&1 || return 1
+    command -v iptables-save >/dev/null 2>&1 || return 1
+    iptables -t nat -nL MIHOMO_REDIRECT >/dev/null 2>&1 || return 1
+    iptables-save -t nat 2>/dev/null | awk '
+        $1 == "-A" && $2 == "MIHOMO_REDIRECT" {
+            for (i=3; i<NF; i++) {
+                if ($i == "-j" && $(i+1) == "REDIRECT") found=1
+            }
+        }
+        END { exit found ? 0 : 1 }
+    '
+}
+
+prompt_client_ipv4() {
+    client_kind=${1:-device}
+    if [ "$client_kind" = phone ]; then
+        default_client_ip=
+        say "Нужен IPv4 телефона из свойств Wi-Fi, не IP компьютера с SSH."
+    else
+        default_client_ip=$(detect_ssh_client_ip)
+        if ! ipv4_valid "$default_client_ip"; then
+            default_client_ip=
+        fi
+    fi
+    if [ -n "$default_client_ip" ]; then
+        printf 'IPv4 тестового устройства [%s]: ' "$default_client_ip"
+    elif [ "$client_kind" = phone ]; then
+        printf 'IPv4 телефона (Wi-Fi): '
+    else
+        printf 'IPv4 тестового устройства: '
+    fi
+    IFS= read -r MENU_CLIENT_IP || MENU_CLIENT_IP=
+    [ -n "$MENU_CLIENT_IP" ] || MENU_CLIENT_IP=$default_client_ip
+    if ! ipv4_valid "$MENU_CLIENT_IP"; then
+        say "IPv4 не указан или введён неверно."
+        return 1
+    fi
+}
+
+start_live_test_interactive() {
+    live_kind=$1
+    if [ "$live_kind" = quic ]; then
+        say "Тест: IPv4/UDP 443 одного телефона, 120 с, без apply/restart, с автооткатом."
+    fi
+    ensure_test_engine_interactive || return 1
+    case "$live_kind" in
+        quic) prompt_client_ipv4 phone || return 1 ;;
+        *) prompt_client_ipv4 device || return 1 ;;
+    esac
+    case "$live_kind" in
+        voice) say "На 120 секунд только устройство $MENU_CLIENT_IP будет направлено в тест Discord voice." ;;
+        quic) say "На 120 секунд IPv4 UDP/443 телефона $MENU_CLIENT_IP попадёт в тестовую очередь; nfqws изменяет только QUIC доменов YouTube." ;;
+    esac
+    canary_live_start "$live_kind" "$MENU_CLIENT_IP" 120
+}
+
+build_youtube_live_test_index() {
+    youtube_live_index_target=$1
+    : > "$youtube_live_index_target"
+    find "$YOUTUBE_DIR" -type f -name 'Yv*.strategy' 2>/dev/null |
+        sed 's#.*/Yv##; s/\.strategy$//' | sort -n |
+        awk -v current="$YOUTUBE_PROFILE" -v recommended="$RECOMMENDED_YOUTUBE_PROFILE" '
+            /^[0-9]+$/ {
+                id="Yv" $0
+                label=id
+                if (id == current) label=label " [выбран сейчас]"
+                if (id == recommended) label=label " [рекомендуется]"
+                print id "|" label
+            }
+        ' > "$youtube_live_index_target"
+}
+
+start_youtube_tcp_test_interactive() {
+    ensure_layout
+    ensure_test_engine_interactive || return 1
+    make_tmp
+    build_youtube_live_test_index "$KZM_TMP/youtube-live-menu.tsv"
+    say "Выберите TCP-профиль только для временного теста; сохранённый выбор YouTube не изменится."
+    if ! menu_choose_numbered "$KZM_TMP/youtube-live-menu.tsv" "Профиль для live-теста"; then
+        say "Live-тест отменён."
+        return 0
+    fi
+    live_youtube_profile=$MENU_SELECTED
+    prompt_client_ipv4 phone || return 1
+    say "На 120 секунд только TCP/443 телефона $MENU_CLIENT_IP попадёт в профиль $live_youtube_profile."
+    canary_youtube_live_start "$MENU_CLIENT_IP" "$live_youtube_profile" 120
+}
+
+youtube_live_test_menu() {
+    while :; do
+        menu_clear
+        printf 'Live-тест YouTube на одном телефоне\n\n'
+        printf '  Временный тест: %s\n\n' "$(live_test_status_ru)"
+        printf '  1) Проверить TCP-профиль YvNN (выбор профиля по номеру, 120 с)\n'
+        printf '  2) Проверить QUIC YouTube (UDP/443, 120 с)\n'
+        printf '  Enter) Назад в меню тестирования\n\n'
+        printf 'Выберите пункт: '
+        IFS= read -r youtube_live_choice || return
+        case "$youtube_live_choice" in
+            1) menu_execute start_youtube_tcp_test_interactive ;;
+            2) menu_execute start_live_test_interactive quic ;;
+            0|'') return ;;
+            *) say "Введите номер из списка."; menu_pause ;;
+        esac
+    done
+}
+
+apply_interactive() {
+    if [ -e "$NFQWS2_INIT" ]; then
+        say "Сейчас установлен nfqws2-keenetic, а выбранные профили имеют формат zapret1."
+        say "KZM не будет автоматически заменять движок: конфиг и интернет не изменены."
+        say "Для перехода сначала нужен отдельный безопасный сценарий из MIGRATION.md."
+        return 1
+    fi
+    if [ ! -x "$NFQWS_INIT" ] || [ ! -x "$NFQWS_BIN" ] || [ ! -f "$NFQWS_CONFIG" ]; then
+        say "Классический nfqws-keenetic установлен не полностью. Ничего не изменено."
+        return 1
+    fi
+    say "Будут записаны выбранные настройки, создана резервная копия и перезапущен только nfqws."
+    say "SSH может кратко прерваться; при ошибке запуска конфиг будет автоматически возвращён."
+    if ! menu_confirm "Применить настройки сейчас?"; then
+        say "Применение отменено."
+        return 0
+    fi
+    apply_config --restart --yes
+}
+
+update_interactive() {
+    say "Обновляются только каталог стратегий, списки и fake-файлы."
+    say "Активный конфиг и службы не меняются."
+    catalog_update
+}
+
+delete_test_results_interactive() {
+    if menu_confirm "Удалить сохранённые результаты тестов?"; then
+        rm -f "$LAST_TEST_RESULT" "$LAST_TEST_META"
+        say "Результаты тестов удалены."
+    else
+        say "Удаление отменено."
+    fi
+}
+
+storage_cleanup_interactive() {
+    storage_status_command
+    if menu_confirm "Очистить перечисленные журналы?"; then
+        storage_cleanup_command --yes
+    else
+        say "Очистка отменена."
+    fi
+}
+
+restore_command() {
+    restore_name=${1:-}
+    [ -n "$restore_name" ] || die "укажите имя резервной копии из kzm backup list"
+    case "$restore_name" in */*|*\\*|.|..) die "укажите только имя файла" ;; esac
+    restore_path="$BACKUP_DIR/$restore_name"
+    [ -f "$restore_path" ] || die "резервная копия не найдена"
+    sh -n "$restore_path" || die "резервная копия синтаксически повреждена"
+    current_backup=$(create_backup) || die "не удалось зарезервировать текущий конфиг"
+    cp "$restore_path" "$NFQWS_CONFIG.kzm-restore"
+    chmod 600 "$NFQWS_CONFIG.kzm-restore" 2>/dev/null || true
+    mv "$NFQWS_CONFIG.kzm-restore" "$NFQWS_CONFIG"
+    rm -f "$ACTIVE_STRATEGY" "$CONFIGURED_STATE" "$RUNNING_STATE"
+    say "Конфиг восстановлен без перезапуска. Предыдущее состояние: $current_backup"
+}
+
+build_general_menu_index() {
+    general_index_target=$1
+    : > "$general_index_target"
+    find "$GENERAL_DIR" -type f -name 'v*.strategy' 2>/dev/null |
+        sed 's#.*/v##; s/\.strategy$//' | sort -n |
+        awk -v current="$GENERAL_PROFILE" -v recommended="$RECOMMENDED_GENERAL_PROFILE" '
+            {
+                id="v" $0
+                label=id
+                if (id == current) label=label " [сейчас]"
+                if (id == recommended) label=label " [рекомендуется]"
+                print id "|" label
+            }
+        ' >> "$general_index_target"
+    if [ -s "$FLOWSEAL_DIR/index.tsv" ]; then
+        awk -F'|' -v current="$GENERAL_PROFILE" -v recommended="$RECOMMENDED_GENERAL_PROFILE" '
+            NF >= 2 {
+                id="flow:" $1
+                label="Flowseal: " $2
+                if (id == current) label=label " [сейчас]"
+                if (id == recommended) label=label " [рекомендуется]"
+                print id "|" label
+            }
+        ' "$FLOWSEAL_DIR/index.tsv" >> "$general_index_target"
+    fi
+    find "$CUSTOM_DIR" -type f -name '*.strategy' 2>/dev/null |
+        sed 's#.*/##; s/\.strategy$//' | sort |
+        awk -v current="$GENERAL_PROFILE" '
+            {
+                id="custom:" $0
+                label="Своя: " $0
+                if (id == current) label=label " [сейчас]"
+                print id "|" label
+            }
+        ' >> "$general_index_target"
+}
+
+build_youtube_menu_index() {
+    youtube_index_target=$1
+    if [ "$YOUTUBE_PROFILE" = off ]; then
+        printf '%s\n' 'off|Отключить [сейчас]' > "$youtube_index_target"
+    else
+        printf '%s\n' 'off|Отключить' > "$youtube_index_target"
+    fi
+    find "$YOUTUBE_DIR" -type f -name 'Yv*.strategy' 2>/dev/null |
+        sed 's#.*/##; s/\.strategy$//' | sort |
+        awk -v current="$YOUTUBE_PROFILE" -v recommended="$RECOMMENDED_YOUTUBE_PROFILE" '
+            {
+                label=$0
+                if ($0 == current) label=label " [сейчас]"
+                if ($0 == recommended) label=label " [рекомендуется]"
+                print $0 "|" label
+            }
+        ' >> "$youtube_index_target"
+}
+
+build_discord_menu_index() {
+    discord_index_target=$1
+    if [ "$DISCORD_MEDIA_PROFILE" = off ]; then
+        printf '%s\n' 'off|Отключить media [сейчас]' > "$discord_index_target"
+    else
+        printf '%s\n' 'off|Отключить media' > "$discord_index_target"
+    fi
+    find "$DISCORD_DIR" -type f -name 'Dv*.strategy' 2>/dev/null |
+        sed 's#.*/Dv##; s/\.strategy$//' | sort -n |
+        awk -v current="$DISCORD_MEDIA_PROFILE" -v recommended="$RECOMMENDED_DISCORD_MEDIA_PROFILE" '
+            {
+                id="Dv" $0
+                label=id
+                if (id == current) label=label " [сейчас]"
+                if (id == recommended) label=label " [рекомендуется]"
+                print id "|" label
+            }
+        ' >> "$discord_index_target"
+}
+
+choose_general_interactive() {
+    ensure_layout
+    make_tmp
+    say "Текущая стратегия: $(general_profile_label)"
+    build_general_menu_index "$KZM_TMP/general-menu.tsv"
+    if ! menu_choose_numbered "$KZM_TMP/general-menu.tsv" "Выберите стратегию"; then
+        say "Стратегия не изменена."
+        return 0
+    fi
+    select_general "$MENU_SELECTED"
+}
+
+choose_youtube_interactive() {
+    ensure_layout
+    make_tmp
+    say "Текущий профиль YouTube: $YOUTUBE_PROFILE"
+    build_youtube_menu_index "$KZM_TMP/youtube-menu.tsv"
+    if ! menu_choose_numbered "$KZM_TMP/youtube-menu.tsv" "Выберите профиль YouTube"; then
+        say "Профиль YouTube не изменён."
+        return 0
+    fi
+    select_youtube "$MENU_SELECTED"
+}
+
+choose_discord_media_interactive() {
+    ensure_layout
+    make_tmp
+    say "Текущий профиль discord.media: $DISCORD_MEDIA_PROFILE"
+    build_discord_menu_index "$KZM_TMP/discord-menu.tsv"
+    if ! menu_choose_numbered "$KZM_TMP/discord-menu.tsv" "Выберите профиль Discord media"; then
+        say "Профиль Discord media не изменён."
+        return 0
+    fi
+    select_discord_media "$MENU_SELECTED"
+}
+
+choose_discord_fake_interactive() {
+    ensure_layout
+    while :; do
+        say "Текущий fake для discord,stun: $(discord_fake_status_ru)"
+        say "  1) stun.bin [bol-van, стандартный]"
+        say "  2) stun2.bin [Flowseal]"
+        say "  3) quic_initial_4pda_to.bin [Flowseal]"
+        say "  4) quic_initial_tencent_com.bin [Flowseal]"
+        say "  5) tls_clienthello_sochi_park.bin [Flowseal]"
+        say "  6) quic_initial_www_google_com.bin [bol-van]"
+        say "  7) quic_initial_steamcommunity_com.bin [Flowseal]"
+        say "  8) quic_initial_5ka_ru.bin [Flowseal]"
+        say "  9) quic_initial_rutube_ru.bin [Flowseal]"
+        say "  0) Встроенный payload nfqws (удалить переопределение)"
+        say "  Enter) Назад"
+        printf '\nВыберите fake: '
+        IFS= read -r discord_fake_choice || discord_fake_choice=
+        case "$discord_fake_choice" in
+            '') say "fake не изменён."; return 0 ;;
+            0) selected_fake=off ;;
+            1) selected_fake=stun.bin ;;
+            2) selected_fake=stun2.bin ;;
+            3) selected_fake=quic_initial_4pda_to.bin ;;
+            4) selected_fake=quic_initial_tencent_com.bin ;;
+            5) selected_fake=tls_clienthello_sochi_park.bin ;;
+            6) selected_fake=quic_initial_www_google_com.bin ;;
+            7) selected_fake=quic_initial_steamcommunity_com.bin ;;
+            8) selected_fake=quic_initial_5ka_ru.bin ;;
+            9) selected_fake=quic_initial_rutube_ru.bin ;;
+            *) say "Введите номер от 0 до 9."; continue ;;
+        esac
+        select_discord_fake "$selected_fake"
+        return 0
+    done
+}
+
+select_discord_script_interactive() {
+    selected=$1
+    case "$selected" in
+        50-stun4all)
+            say "50-stun4all требует firewall-проверки STUN-сигнатуры на любом UDP-порту."
+            say "Стандартная очередь Keenetic умеет отбирать здесь только порты; безопасный эквивалент без второй службы отсутствует."
+            say "Режим не выбран, конфиг и службы не изменены."
+            return 0
+            ;;
+        50-quic4all)
+            say "50-quic4all требует firewall-проверки QUIC Initial на любом UDP-порту."
+            say "KZM не будет направлять весь UDP 1-65535 в очередь и не создаст вторую службу. Режим не выбран."
+            return 0
+            ;;
+        50-discord-media)
+            say "На Keenetic этот пункт является алиасом существующего KZM блока voice/media; второй nfqws-блок не добавляется."
+            ;;
+        50-discord)
+            say "Старый 50-discord требует отдельного firewall hook, большого замороженного IPv4 ipset и отбора первых трёх пакетов."
+            say "KZM не подключает этот устаревший ipset и не создаёт вторую службу. Режим не выбран."
+            return 0
+            ;;
+    esac
+    say "Будет изменён только выбор KZM. Конфиг и запущенная служба сейчас не меняются."
+    if menu_confirm "Выбрать $selected?"; then
+        select_discord_script "$selected"
+    else
+        say "Выбор не изменён."
+    fi
+}
+
+show_finland_hosts_unsupported() {
+    say "Пункт Zapret Manager создаёт 200 записей finland10000..10199.discord.media."
+    say "На Keenetic native ip host допускает не более 64 записей, используется ndnproxy, а не OpenWrt dnsmasq."
+    say "Поэтому KZM намеренно не меняет /etc/hosts, DNS и службы. Действие не выполнено."
+}
+
+enable_discord_interactive() {
+    if [ "$DISCORD_MEDIA_PROFILE" = off ] && [ -f "$DISCORD_DIR/$RECOMMENDED_DISCORD_MEDIA_PROFILE.strategy" ]; then
+        select_discord_media "$RECOMMENDED_DISCORD_MEDIA_PROFILE"
+    fi
+    select_toggle discord on
+    say "Включены голос/STUN, UDP-медиа и выбранный профиль discord.media."
+}
+
+toggle_discord_interactive() {
+    if [ "$DISCORD_ENABLED" -eq 1 ]; then
+        DISCORD_ENABLED=0
+        if [ "$DISCORD_SCRIPT" = 50-discord-media ]; then
+            DISCORD_SCRIPT=off
+        fi
+        write_state_file
+        say "Базовый обход Discord выключен. Конфиг и служба ещё не менялись."
+    else
+        enable_discord_interactive
+    fi
+}
+
+toggle_quic_interactive() {
+    if [ "$QUIC_ENABLED" -eq 1 ]; then
+        select_toggle quic off
+        say "YouTube продолжит использовать TCP-профиль $YOUTUBE_PROFILE."
+    else
+        say "QUIC добавляет обход UDP/443 только для доменов YouTube."
+        say "Если Mihomo блокирует UDP/443 раньше nfqws, этот блок нужно отключить отдельно."
+        select_toggle quic on
+    fi
+}
+
+toggle_game_interactive() {
+    if [ "$GAME_ENABLED" -eq 1 ]; then
+        select_toggle game off
+    else
+        select_toggle game on
+        say "Игровой режим добавляет широкий UDP-диапазон; применяйте его только при необходимости."
+    fi
+}
+
+discord_menu() {
+    while :; do
+        menu_clear
+        printf 'Меню настройки Discord\n\n'
+        printf '  Базовый Discord: %s\n' "$(discord_status_ru)"
+        printf '  Установлен скрипт: %s\n' "$(discord_script_status_ru)"
+        printf '  fake в discord,stun: %s\n' "$(discord_fake_status_ru)"
+        printf '  Стратегия для discord.media: %s\n\n' "$DISCORD_MEDIA_PROFILE"
+        printf '  1) Установить скрипт 50-stun4all\n'
+        printf '  2) Установить скрипт 50-quic4all\n'
+        printf '  3) Установить скрипт 50-discord-media\n'
+        printf '  4) Установить скрипт 50-discord\n'
+        printf '  5) Удалить скрипт\n'
+        printf '  6) Добавить Финские IP в hosts [недоступно на Keenetic]\n'
+        printf '  7) Выбрать и установить стратегию для discord.media\n'
+        printf '  8) Меню выбора fake для discord,stun\n'
+        if [ "$DISCORD_ENABLED" -eq 1 ]; then
+            printf '  9) Выключить базовый обход Discord\n'
+        else
+            printf '  9) Включить базовый обход Discord\n'
+        fi
+        printf '  Enter) Выход\n\n'
+        printf 'Выберите пункт: '
+        IFS= read -r discord_choice || return
+        case "$discord_choice" in
+            1) menu_execute select_discord_script_interactive 50-stun4all ;;
+            2) menu_execute select_discord_script_interactive 50-quic4all ;;
+            3) menu_execute select_discord_script_interactive 50-discord-media ;;
+            4) menu_execute select_discord_script_interactive 50-discord ;;
+            5) menu_execute select_discord_script off ;;
+            6) menu_execute show_finland_hosts_unsupported ;;
+            7) menu_execute choose_discord_media_interactive ;;
+            8) menu_execute choose_discord_fake_interactive ;;
+            9) menu_execute toggle_discord_interactive ;;
+            0|'') return ;;
+            *) say "Неизвестный пункт."; menu_pause ;;
+        esac
+    done
+}
+
+scope_menu() {
+    while :; do
+        menu_clear
+        printf 'Область действия основной стратегии\n\n'
+        printf '  Сейчас: %s\n\n' "$(scope_ru)"
+        printf '  1) Только мои домены и IP/подсети\n'
+        printf '  2) Мои цели + автообнаружение доменов\n'
+        printf '  3) Весь веб-трафик, кроме исключений\n'
+        printf '  Enter) Назад в меню стратегий\n\n'
+        printf 'Выберите пункт: '
+        IFS= read -r scope_choice || return
+        case "$scope_choice" in
+            1) menu_execute select_scope list ;;
+            2) menu_execute select_scope auto ;;
+            3) menu_execute select_scope all ;;
+            0|'') return ;;
+            *) say "Неизвестный пункт."; menu_pause ;;
+        esac
+    done
+}
+
+strategies_menu() {
+    while :; do
+        menu_clear
+        printf 'Меню стратегий\n\n'
+        printf '  Сайты:       %s\n' "$(general_profile_label)"
+        printf '  YouTube:     %s\n' "$(youtube_status_ru)"
+        printf '  Discord:     %s\n' "$(discord_status_ru)"
+        printf '  Игровой UDP: %s\n' "$(enabled_ru "$GAME_ENABLED")"
+        printf '  Охват:       %s\n\n' "$(scope_ru)"
+        printf '  1) Выбрать основную стратегию для сайтов\n'
+        printf '  2) Выбрать или отключить стратегию YouTube\n'
+        printf '  3) Настроить Discord\n'
+        if [ "$QUIC_ENABLED" -eq 1 ]; then
+            printf '  4) Выключить обход YouTube QUIC (UDP/443)\n'
+        else
+            printf '  4) Включить обход YouTube QUIC (UDP/443)\n'
+        fi
+        if [ "$GAME_ENABLED" -eq 1 ]; then
+            printf '  5) Выключить игровой UDP\n'
+        else
+            printf '  5) Включить игровой UDP\n'
+        fi
+        printf '  6) Выбрать область действия\n'
+        printf '  Enter) Назад в главное меню\n\n'
+        printf 'Выберите пункт: '
+        IFS= read -r strategy_choice || return
+        case "$strategy_choice" in
+            1) menu_execute choose_general_interactive ;;
+            2) menu_execute choose_youtube_interactive ;;
+            3) discord_menu ;;
+            4) menu_execute toggle_quic_interactive ;;
+            5) menu_execute toggle_game_interactive ;;
+            6) scope_menu ;;
+            0|'') return ;;
+            *) say "Неизвестный пункт."; menu_pause ;;
+        esac
+    done
+}
+
+show_live_test_interactive() {
+    if [ ! -s /tmp/kzm-router-canary.state ]; then
+        say "Временный тест сейчас не запущен."
+        return 0
+    fi
+    canary_status || true
+}
+
+stop_live_test_interactive() {
+    if [ ! -s /tmp/kzm-router-canary.state ]; then
+        say "Временный тест уже остановлен."
+        return 0
+    fi
+    canary_stop
+    say "Временная очередь и её правила удалены."
+}
+
+canary_menu() {
+    while :; do
+        menu_clear
+        printf 'Меню тестирования стратегий\n\n'
+        printf '  Тестовый модуль: %s\n' "$(test_engine_status_ru)"
+        printf '  Временный тест:  %s\n' "$(live_test_status_ru)"
+        if [ -s "$LAST_TEST_RESULT" ]; then
+            printf '  Результаты:      сохранены\n'
+        else
+            printf '  Результаты:      ещё нет\n'
+        fi
+        test_target_count=$(awk 'END { print NR+0 }' "$TEST_TARGETS" 2>/dev/null)
+        printf '\n  1) Проверить текущую стратегию на полном списке (%s адресов)\n' "${test_target_count:-0}"
+        printf '  2) Найти лучшую стратегию v + Flowseal (долгий тест)\n'
+        printf '  3) Подобрать стратегию для своих доменов\n'
+        printf '  4) Проверить голос и медиа Discord на одном устройстве\n'
+        printf '  5) Live-тест YouTube на телефоне: TCP-профиль или QUIC\n'
+        printf '  6) Показать состояние временного теста\n'
+        printf '  7) Обновить отдельный тестовый модуль\n'
+        if [ -s "$LAST_TEST_RESULT" ]; then
+            printf '  8) Показать последние результаты\n'
+            printf '  9) Удалить результаты тестов\n'
+        fi
+        if [ -s /tmp/kzm-router-canary.state ]; then
+            printf '  10) Немедленно остановить временный тест\n'
+        fi
+        printf '  Enter) Назад в главное меню\n\n'
+        printf 'Выберите пункт: '
+        IFS= read -r canary_choice || return
+        case "$canary_choice" in
+            1) menu_execute run_strategy_test_interactive current ;;
+            2) menu_execute run_strategy_test_interactive all ;;
+            3) menu_execute run_strategy_test_interactive domain ;;
+            4) menu_execute start_live_test_interactive voice ;;
+            5) youtube_live_test_menu ;;
+            6) menu_execute show_live_test_interactive ;;
+            7) menu_execute canary_engine_update ;;
+            8) [ -s "$LAST_TEST_RESULT" ] && menu_execute show_strategy_test_results "$LAST_TEST_RESULT" ;;
+            9) [ -s "$LAST_TEST_RESULT" ] && menu_execute delete_test_results_interactive ;;
+            10) [ -s /tmp/kzm-router-canary.state ] && menu_execute stop_live_test_interactive ;;
+            0|'') return ;;
+            *) say "Неизвестный пункт."; menu_pause ;;
+        esac
+    done
+}
+
+domain_add_interactive() {
+    printf 'Домен без https://: '
+    IFS= read -r selected_domain || selected_domain=
+    [ -n "$selected_domain" ] || {
+        say "Добавление отменено."
+        return 0
+    }
+    domain_add add "$selected_domain"
+}
+
+network_add_interactive() {
+    printf 'IPv4, IPv6 или CIDR-подсеть: '
+    IFS= read -r selected_network || selected_network=
+    [ -n "$selected_network" ] || {
+        say "Добавление отменено."
+        return 0
+    }
+    network_add add "$selected_network"
+}
+
+build_user_target_menu_index() {
+    target_index_file=$1
+    : > "$target_index_file"
+    awk 'NF { print "domain:" $0 "|[домен] " $0 }' "$USER_LIST" >> "$target_index_file"
+    awk 'NF {
+        kind=(index($0, ":") ? "IPv6" : "IPv4")
+        print "network:" $0 "|[" kind "] " $0
+    }' "$USER_IPSET" >> "$target_index_file"
+}
+
+show_user_targets_interactive() {
+    ensure_layout
+    make_tmp
+    build_user_target_menu_index "$KZM_TMP/user-targets.tsv"
+    if [ ! -s "$KZM_TMP/user-targets.tsv" ]; then
+        say "Пользовательский список пуст."
+        return 0
+    fi
+    say "Пользовательские сайты и сети:"
+    menu_show_numbered "$KZM_TMP/user-targets.tsv"
+}
+
+target_remove_interactive() {
+    ensure_layout
+    make_tmp
+    build_user_target_menu_index "$KZM_TMP/user-targets.tsv"
+    if [ ! -s "$KZM_TMP/user-targets.tsv" ]; then
+        say "Удалять нечего: пользовательский список пуст."
+        return 0
+    fi
+    if ! menu_choose_numbered "$KZM_TMP/user-targets.tsv" "Какую запись удалить"; then
+        say "Удаление отменено."
+        return 0
+    fi
+    case "$MENU_SELECTED" in
+        domain:*) domain_remove remove "${MENU_SELECTED#domain:}" ;;
+        network:*) network_remove remove "${MENU_SELECTED#network:}" ;;
+        *) die "некорректная запись списка" ;;
+    esac
+}
+
+target_menu() {
+    while :; do
+        menu_clear
+        ensure_layout
+        printf 'Пользовательские сайты и сети\n\n'
+        printf '  Режим: %s\n' "$(scope_ru)"
+        printf '  Домены: %s\n' "$(awk 'END { print NR+0 }' "$USER_LIST")"
+        printf '  IP/подсети: %s\n\n' "$(awk 'END { print NR+0 }' "$USER_IPSET")"
+        if [ -e "$NFQWS2_INIT" ]; then
+            printf '  Внимание: сейчас работает nfqws2; этот список сохранится,\n'
+            printf '  но начнёт участвовать в трафике только после безопасного перехода на zapret1.\n\n'
+        fi
+        printf '  1) Показать список\n'
+        printf '  2) Добавить домен\n'
+        printf '  3) Добавить IP или подсеть\n'
+        printf '  4) Удалить запись по номеру\n'
+        printf '  5) Изменить область действия\n'
+        printf '  Enter) Назад\n\n'
+        printf 'Выберите пункт: '
+        IFS= read -r target_choice || return
+        case "$target_choice" in
+            1) menu_execute show_user_targets_interactive ;;
+            2) menu_execute domain_add_interactive ;;
+            3) menu_execute network_add_interactive ;;
+            4) menu_execute target_remove_interactive ;;
+            5) scope_menu ;;
+            0|'') return ;;
+            *) say "Неизвестный пункт."; menu_pause ;;
+        esac
+    done
+}
+
+build_backup_menu_index() {
+    backup_index_target=$1
+    : > "$backup_index_target"
+    ensure_layout
+    # Names are generated by this program and cannot contain whitespace.
+    # shellcheck disable=SC2012
+    ls -1t "$BACKUP_DIR"/nfqws.conf.* 2>/dev/null |
+        sed 's#.*/##' | awk 'NF { print $0 "|" $0 }' > "$backup_index_target" || true
+}
+
+show_backups_interactive() {
+    make_tmp
+    build_backup_menu_index "$KZM_TMP/backups.tsv"
+    if [ ! -s "$KZM_TMP/backups.tsv" ]; then
+        say "Резервных копий пока нет."
+        return 0
+    fi
+    say "Резервные копии (сначала новые):"
+    menu_show_numbered "$KZM_TMP/backups.tsv"
+}
+
+restore_backup_interactive() {
+    make_tmp
+    build_backup_menu_index "$KZM_TMP/backups.tsv"
+    if [ ! -s "$KZM_TMP/backups.tsv" ]; then
+        say "Резервных копий пока нет."
+        return 0
+    fi
+    if ! menu_choose_numbered "$KZM_TMP/backups.tsv" "Какую копию восстановить"; then
+        say "Восстановление отменено."
+        return 0
+    fi
+    restore_name=$MENU_SELECTED
+    if menu_confirm "Восстановить $restore_name без перезапуска службы?"; then
+        restore_command "$restore_name"
+    else
+        say "Восстановление отменено."
+    fi
+}
+
+backup_menu() {
+    while :; do
+        menu_clear
+        printf 'Резервные копии nfqws.conf\n\n'
+        printf '  1) Показать список\n'
+        printf '  2) Создать копию сейчас\n'
+        printf '  3) Восстановить копию без перезапуска\n'
+        printf '  Enter) Назад\n\n'
+        printf 'Выберите пункт: '
+        IFS= read -r backup_choice || return
+        case "$backup_choice" in
+            1) menu_execute show_backups_interactive ;;
+            2) menu_execute create_backup ;;
+            3) menu_execute restore_backup_interactive ;;
+            0|'') return ;;
+            *) say "Неизвестный пункт."; menu_pause ;;
+        esac
+    done
+}
+
+write_config_interactive() {
+    if [ -e "$NFQWS2_INIT" ]; then
+        say "Запись zapret1-конфига заблокирована, пока установлен nfqws2. Ничего не изменено."
+        return 1
+    fi
+    apply_config
+}
+
+restart_interactive() {
+    if [ -e "$NFQWS2_INIT" ]; then
+        say "Это меню управляет только классическим nfqws и не трогает запущенный nfqws2."
+        return 1
+    fi
+    if menu_confirm "Перезапустить классический nfqws? SSH может кратко прерваться"; then
+        service_command restart --yes
+    else
+        say "Перезапуск отменён."
+    fi
+}
+
+cleanup_auto_interactive() {
+    say "Будет очищен только автоматически накопленный список и его журналы."
+    say "Пользовательские домены, IP/подсети, стратегии и конфиг сохранятся."
+    if menu_confirm "Продолжить?"; then
+        cleanup_command --yes
+    else
+        say "Очистка отменена."
+    fi
+}
+
+advanced_menu() {
+    while :; do
+        menu_clear
+        printf 'Дополнительные возможности\n\n'
+        printf '  1) Показать итоговую техническую стратегию\n'
+        printf '  2) Записать конфиг без перезапуска\n'
+        printf '  3) Перезапустить классический nfqws\n'
+        printf '  4) Резервные копии nfqws.conf\n'
+        printf '  5) Проверить и очистить журналы на флешке\n'
+        printf '  6) Очистить список автообнаружения\n'
+        printf '  7) Полная диагностика окружения\n'
+        printf '  8) Показать команды для ручного управления\n'
+        printf '  Enter) Назад в главное меню\n\n'
+        printf 'Выберите пункт: '
+        IFS= read -r advanced_choice || return
+        case "$advanced_choice" in
+            1) menu_execute preview_command ;;
+            2) menu_execute write_config_interactive ;;
+            3) menu_execute restart_interactive ;;
+            4) backup_menu ;;
+            5) menu_execute storage_cleanup_interactive ;;
+            6) menu_execute cleanup_auto_interactive ;;
+            7) menu_execute doctor_command ;;
+            8) menu_execute usage ;;
+            0|'') return ;;
+            *) say "Неизвестный пункт."; menu_pause ;;
+        esac
+    done
+}
+
+interactive_menu() {
+    ensure_layout
+    while :; do
+        menu_clear
+        printf '╔════════════════════════════════════╗\n'
+        printf '║  Keenetic Zapret Manager %-8s  ║\n' "$KZM_VERSION"
+        printf '╚════════════════════════════════════╝\n\n'
+        printf '  Сайты:       %s\n' "$(general_profile_label)"
+        printf '  YouTube:     %s\n' "$(youtube_status_ru)"
+        printf '  Discord:     %s\n' "$(discord_status_ru)"
+        printf '  Игровой UDP: %s\n' "$(enabled_ru "$GAME_ENABLED")"
+        printf '  Движок:      %s\n' "$(engine_status_ru)"
+        printf '  Настройки:   %s\n' "$(configuration_status_ru)"
+        printf '  Каталог:     %s\n\n' "$(catalog_status_ru)"
+        printf '  1) Меню стратегий\n'
+        printf '  2) Мои сайты и IP/подсети\n'
+        printf '  3) Меню тестирования стратегий\n'
+        printf '  4) Обновить стратегии и файлы обхода\n'
+        printf '  5) Применить выбранные настройки\n'
+        printf '  6) Показать полное состояние\n'
+        printf '  7) Дополнительные возможности\n'
+        printf '  Enter) Выход\n\n'
+        printf 'Выберите пункт: '
+        IFS= read -r menu_choice || return
+        case "$menu_choice" in
+            1) strategies_menu ;;
+            2) target_menu ;;
+            3) canary_menu ;;
+            4) menu_execute update_interactive ;;
+            5) menu_execute apply_interactive ;;
+            6) menu_execute status_command ;;
+            7) advanced_menu ;;
+            0|'') return ;;
+            *) say "Неизвестный пункт."; menu_pause ;;
+        esac
+    done
+}
+
+component_manager_command() {
+    component_manager="$KZM_LIBEXEC/component-manager.sh"
+    [ -x "$component_manager" ] || die "не найден менеджер компонентов: $component_manager"
+    KZM_ROOT="$KZM_ROOT" \
+    KZM_PREFIX="$KZM_PREFIX" \
+    KZM_BASE="$KZM_BASE" \
+    KZM_ETC="$KZM_ETC" \
+    KZM_LIBEXEC="$KZM_LIBEXEC" \
+    KZM_SHARE="$KZM_SHARE" \
+    "$component_manager" "$@"
+}
+
+usage() {
+    cat <<'EOF'
+Использование: kzm COMMAND
+
+  menu                              общее меню Keenetic Manager
+  zapret                            меню стратегий, сайтов и тестов Zapret
+  components COMMAND [...]          установка и управление TG-прокси
+  status                            показать выбор и состояние движка
+  doctor                            read-only проверка окружения
+  update                            обновить v/Flowseal/YouTube/Discord, тесты и fake-файлы
+  strategy list [general|youtube|discord|custom|all]
+  strategy set general <vN|flow:NAME|custom:NAME>
+  strategy set youtube <YvNN|off>
+  strategy set discord <on|off>
+  strategy set discord-media <DvN|off>
+  strategy set discord-script <off|50-discord-media>
+  strategy set discord-fake <NAME|off>
+  strategy set quic <on|off>        QUIC UDP/443 для списка YouTube
+  strategy set game <on|off>
+  strategy set scope <all|list|auto>
+  strategy import <NAME> <FILE>     импортировать custom-стратегию
+  preview                           показать итог без записи
+  apply [--restart --yes]           записать конфиг; по умолчанию без restart
+  service status
+  service restart --yes
+  domain add <DOMAIN...>
+  domain remove <DOMAIN...>
+  domain list
+  network add <IP_OR_CIDR...>       добавить IPv4/IPv6 адреса или подсети
+  network remove <IP_OR_CIDR...>
+  network list
+  backup create|list
+  backup restore <FILENAME>         восстановить без restart
+  cleanup --yes                     очистить auto.list и его журналы
+  storage status                    показать размер безопасно очищаемых журналов
+  storage cleanup --yes             очистить журналы Mihomo/KZM без restart
+  test engine-update                извлечь nfqws в отдельный каталог, без установки
+  test suite [current|v|flowseal|all]
+                                    полный список Zapret Manager через очередь 301
+  test domain <DOMAIN...>           v + Flowseal на указанных доменах
+  test general [HOST [PATH]]        короткий Discord/API-тест v-профилей
+  test voice start <CLIENT_IP> [TTL]
+  test quic start <CLIENT_IP> [TTL]
+  test youtube start <CLIENT_IP> <YvNN> [TTL]
+                                    TCP-профиль YouTube для одного IPv4; без apply/restart
+  test status|stop                  счётчики или немедленный откат canary
+  version
+
+Без аргументов открывается общее меню. Старое меню Zapret доступно как `kzm zapret`.
+EOF
+}
+
+main() {
+    command=${1:-${KZM_DEFAULT_COMMAND:-menu}}
+    [ "$#" -eq 0 ] || shift
+    case "$command" in
+        menu|manager) component_manager_command menu ;;
+        zapret) interactive_menu ;;
+        components|component) component_manager_command "$@" ;;
+        status) status_command ;;
+        doctor) doctor_command ;;
+        update) catalog_update ;;
+        preview) preview_command ;;
+        apply) apply_config "$@" ;;
+        service) service_command "$@" ;;
+        cleanup) cleanup_command "$@" ;;
+        storage)
+            subcommand=${1:-status}
+            [ "$#" -eq 0 ] || shift
+            case "$subcommand" in
+                status) storage_status_command ;;
+                cleanup) storage_cleanup_command "$@" ;;
+                *) die "storage поддерживает status или cleanup --yes" ;;
+            esac
+            ;;
+        test) canary_test_command "$@" ;;
+        version|--version|-V) say "$KZM_VERSION" ;;
+        help|--help|-h) usage ;;
+        strategy)
+            subcommand=${1:-}
+            [ "$#" -eq 0 ] || shift
+            case "$subcommand" in
+                list) list_strategies "${1:-all}" ;;
+                set)
+                    target=${1:-}
+                    value=${2:-}
+                    if [ -z "$target" ] || [ -z "$value" ]; then
+                        die "strategy set требует цель и значение"
+                    fi
+                    case "$target" in
+                        general) select_general "$value" ;;
+                        youtube) select_youtube "$value" ;;
+                        discord|quic|game) select_toggle "$target" "$value" ;;
+                        discord-media) select_discord_media "$value" ;;
+                        discord-script) select_discord_script "$value" ;;
+                        discord-fake) select_discord_fake "$value" ;;
+                        scope) select_scope "$value" ;;
+                        *) die "цель: general, youtube, discord, discord-media, discord-script, discord-fake, quic, game или scope" ;;
+                    esac
+                    ;;
+                import)
+                    [ "$#" -eq 2 ] || die "strategy import требует NAME и FILE"
+                    import_custom "$1" "$2"
+                    ;;
+                *) die "strategy поддерживает list, set и import" ;;
+            esac
+            ;;
+        domain)
+            subcommand=${1:-list}
+            [ "$#" -eq 0 ] || shift
+            case "$subcommand" in
+                add) domain_add add "$@" ;;
+                remove) domain_remove remove "$@" ;;
+                list) ensure_layout; cat "$USER_LIST" ;;
+                *) die "domain поддерживает add, remove и list" ;;
+            esac
+            ;;
+        network|address|subnet)
+            subcommand=${1:-list}
+            [ "$#" -eq 0 ] || shift
+            case "$subcommand" in
+                add) network_add add "$@" ;;
+                remove) network_remove remove "$@" ;;
+                list) ensure_layout; cat "$USER_IPSET" ;;
+                *) die "network поддерживает add, remove и list" ;;
+            esac
+            ;;
+        backup)
+            subcommand=${1:-list}
+            [ "$#" -eq 0 ] || shift
+            case "$subcommand" in
+                create) create_backup ;;
+                list)
+                    ensure_layout
+                    # Names are generated by this program and cannot contain whitespace.
+                    # shellcheck disable=SC2012
+                    ls -1t "$BACKUP_DIR"/nfqws.conf.* 2>/dev/null | sed 's#.*/##'
+                    ;;
+                restore) restore_command "$@" ;;
+                *) die "backup поддерживает create, list и restore" ;;
+            esac
+            ;;
+        *) usage; exit 1 ;;
+    esac
+}
+
+main "$@"

@@ -1,0 +1,19 @@
+# Router-specific snapshots may contain private addresses, configuration,
+# runtime metadata, or credentials and must never be published.
+router-snapshots/
+
+# Local build and test artefacts.
+build/
+dist/
+*.zip
+*.log
+*.tmp
+*.bak
+*.old
+
+# Editor and operating-system metadata.
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+Desktop.ini

@@ -1,0 +1,15 @@
+# Keep router scripts executable after checkout and prevent Windows CRLF from
+# breaking BusyBox /bin/sh and awk sources.
+* text=auto eol=lf
+*.sh text eol=lf
+*.awk text eol=lf
+*.strategy text eol=lf
+*.list text eol=lf
+*.tsv text eol=lf
+*.md text eol=lf
+src/kzm text eol=lf
+src/kzm.conf text eol=lf
+src/share/kzm/components/* text eol=lf
+
+# Binary protocol fixture.
+*.bin binary
