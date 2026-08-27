@@ -17,11 +17,6 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Enable NFQUEUE support
-        run: |
-          sudo modprobe nfnetlink_queue
-          test -r /proc/net/netfilter/nfnetlink_queue
-
       - name: Run tests in an isolated Linux container
         run: |
           docker run --rm --privileged \

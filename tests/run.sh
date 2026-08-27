@@ -658,6 +658,9 @@ grep -q 'Автооткат.*kzm test stop' "$TEST_ROOT/live-status-hint.txt"
 # canary, requests the optional exact Mihomo bypass only for detected topology,
 # and never writes the production nfqws config or invokes its init script.
 mkdir -p "$TEST_ROOT/mock-live-bin"
+mkdir -p "$TEST_ROOT/mock-proc/net/netfilter"
+: > "$TEST_ROOT/mock-proc/net/netfilter/nfnetlink_queue"
+export KZM_PROC_ROOT="$TEST_ROOT/mock-proc"
 cat > "$TEST_ROOT/mock-live-bin/iptables" <<'EOF'
 #!/bin/sh
 exit 0

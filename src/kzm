@@ -12,6 +12,7 @@ KZM_LIBEXEC="${KZM_LIBEXEC:-$KZM_BASE/libexec/kzm}"
 KZM_CONFIG="${KZM_CONFIG:-$KZM_ETC/kzm.conf}"
 KZM_TMP=""
 KZM_TMP_BASE=""
+KZM_PROC_ROOT="${KZM_PROC_ROOT:-/proc}"
 
 NFQWS_DIR="${NFQWS_DIR:-$KZM_BASE/etc/nfqws}"
 NFQWS_CONFIG="${NFQWS_CONFIG:-$NFQWS_DIR/nfqws.conf}"
@@ -1675,7 +1676,7 @@ canary_live_require() {
     [ -x "$KZM_CANARY_BIN" ] || die "нет изолированного nfqws; выполните: kzm test engine-update"
     [ -x "$KZM_LIBEXEC/router-canary.sh" ] || die "не найден router-canary.sh; переустановите менеджер"
     command -v iptables >/dev/null 2>&1 || die "для live-теста нужен iptables"
-    [ -r /proc/net/netfilter/nfnetlink_queue ] || die "ядро не предоставляет NFQUEUE"
+    [ -r "$KZM_PROC_ROOT/net/netfilter/nfnetlink_queue" ] || die "ядро не предоставляет NFQUEUE"
     iptables -t mangle -nL POSTROUTING >/dev/null 2>&1 || die "не найдена mangle-цепочка POSTROUTING для временного теста"
 }
 
