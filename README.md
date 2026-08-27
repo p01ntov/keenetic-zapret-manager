@@ -1,11 +1,54 @@
-# Keenetic Zapret Manager
+<h1 align="center">Keenetic Zapret Manager</h1>
 
-Keenetic Zapret Manager (`kzm`) помогает настроить классический `zapret/nfqws`
-на роутере Keenetic через понятное SSH-меню. Стратегии, YouTube, Discord,
-пользовательские сайты и тесты собраны в одном месте — вручную редактировать
-длинную строку запуска `nfqws` не требуется.
+<div align="center">
 
-Менеджер рассчитан на Keenetic с Entware. OpenWrt, UCI и LuCI ему не нужны.
+![Platform](https://img.shields.io/badge/Platform-Keenetic-00a0df)
+![Environment](https://img.shields.io/badge/Environment-Entware-orange)
+![Shell](https://img.shields.io/badge/Shell-POSIX%20sh-informational)
+![License](https://img.shields.io/badge/License-MIT-success)
+
+Менеджер `nfqws` для Keenetic, основанный на идеях и каталоге
+[StressOzz/Zapret-Manager](https://github.com/StressOzz/Zapret-Manager)
+
+</div>
+
+---
+
+Оригинальный [Zapret Manager](https://github.com/StressOzz/Zapret-Manager)
+удобен, но рассчитан на OpenWrt. KZM появился как его адаптация для Keenetic с
+Entware. Он загружает знакомые профили `v`, Flowseal, `Yv` и `Dv`, переводит их
+в конфигурацию `nfqws-keenetic` и даёт управлять всем из одного SSH-меню.
+
+Это не копия OpenWrt-скрипта. У Keenetic другая файловая система, запуск служб
+и firewall, поэтому менеджер написан отдельно. От проекта StressOzz здесь —
+идея, структура меню и импортируемый каталог стратегий. Keenetic-часть,
+проверка конфигурации и безопасное применение сделаны специально для KZM.
+
+> [!IMPORTANT]
+> Не запускайте установочные команды из OpenWrt-версии на Keenetic. KZM не
+> использует UCI и LuCI и не запускает upstream-установщик — он забирает только
+> нужные данные и применяет их средствами Entware.
+
+| | StressOzz/Zapret-Manager | Keenetic Zapret Manager |
+|---|---|---|
+| Платформа | OpenWrt | Keenetic + Entware |
+| Движок | OpenWrt-пакеты Zapret/Zapret2 | `nfqws-keenetic` |
+| Конфигурация | UCI и `/etc/config` | `/opt/etc/kzapret-manager` и `nfqws.conf` |
+| Интерфейс | SSH, LuCI/браузер | SSH-меню и команда `kzm` |
+| Применение | Меню оригинального скрипта | Предпросмотр, dry-run, явный перезапуск и автооткат |
+
+## Оглавление
+
+- [Возможности](#что-умеет-kzm)
+- [Быстрый старт](#быстрый-старт)
+- [Как применяются изменения](#что-именно-меняют-команды)
+- [Свои сайты и IP-подсети](#свои-сайты-и-ip-подсети)
+- [YouTube, Discord и QUIC](#youtube-discord-и-quic)
+- [Проверка стратегий](#проверка-стратегий)
+- [Telegram-прокси](#telegram-прокси)
+- [Справочник команд](#справочник-команд)
+- [Совместимость и требования](#совместимость-и-требования)
+- [Дополнительная документация](#дополнительная-документация)
 
 ## Что умеет KZM
 
@@ -32,15 +75,21 @@ Keenetic Zapret Manager (`kzm`) помогает настроить класси
 
 ### 1. Установите менеджер
 
-Скопируйте архив проекта на роутер, распакуйте его и в каталоге с файлами
-выполните:
+Подключитесь к роутеру по SSH и скачайте свежую версию из GitHub:
 
 ```sh
+cd /tmp
+curl -fL https://github.com/p01ntov/keenetic-zapret-manager/archive/refs/heads/main.tar.gz -o kzm-main.tar.gz
+tar -xzf kzm-main.tar.gz
+cd keenetic-zapret-manager-main
 sh install.sh
 ```
 
-Установщик копирует файлы KZM, но не удаляет другой движок, не запускает службы
-и не перезапускает сеть.
+Если проект уже скачан на компьютер, можно вместо этого скопировать каталог на
+роутер и запустить `sh install.sh` из него.
+
+Установщик ставит только KZM. Он не удаляет другой движок, не запускает службы
+и не перезапускает сеть — решение о переходе остаётся за вами.
 
 ### 2. Откройте меню
 
@@ -350,6 +399,28 @@ sh tests/integration-live.sh
 
 Она предназначена для локальной машины или контейнера и не использует реальный
 роутер.
+
+## Происхождение и благодарности
+
+Без [StressOzz/Zapret-Manager](https://github.com/StressOzz/Zapret-Manager)
+этого проекта не было бы. Оттуда взяты сама идея менеджера, логика разделения
+профилей и актуальный каталог стратегий. Спасибо StressOzz за оригинальный
+проект и за то, что собрал разрозненные инструменты в понятный сценарий.
+
+Ключевые внешние проекты:
+
+- [bol-van/zapret](https://github.com/bol-van/zapret) — движок `nfqws`;
+- [nfqws/nfqws-keenetic](https://github.com/nfqws/nfqws-keenetic) — интеграция
+  классического `nfqws` с Keenetic;
+- [Flowseal/zapret-discord-youtube](https://github.com/Flowseal/zapret-discord-youtube)
+  — дополнительные стратегии и fake-файлы;
+- [valnesfjord/tg-ws-proxy-rs](https://github.com/valnesfjord/tg-ws-proxy-rs),
+  [d0mhate/-tg-ws-proxy-Manager-go](https://github.com/d0mhate/-tg-ws-proxy-Manager-go)
+  и [spatiumstas/tg-ws-proxy-go](https://github.com/spatiumstas/tg-ws-proxy-go)
+  — необязательные Telegram-прокси.
+
+О том, что именно загружается со стороны и под какими лицензиями, написано в
+[THIRD_PARTY.md](THIRD_PARTY.md).
 
 ## Дополнительная документация
 
