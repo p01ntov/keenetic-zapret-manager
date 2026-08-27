@@ -78,10 +78,10 @@ Entware. Он загружает знакомые профили `v`, Flowseal, 
 Подключитесь к роутеру по SSH и скачайте свежую версию из GitHub:
 
 ```sh
-cd /tmp
-curl -fL https://github.com/p01ntov/keenetic-zapret-manager/archive/refs/heads/main.tar.gz -o kzm-main.tar.gz
-tar -xzf kzm-main.tar.gz
-cd keenetic-zapret-manager-main
+KZM_TMP="$(mktemp -d /tmp/kzm-install.XXXXXX)" || exit 1
+cd "$KZM_TMP" || exit 1
+curl -fL https://github.com/p01ntov/keenetic-zapret-manager/releases/download/v0.8.1-beta/keenetic-zapret-manager.tar.gz -o kzm.tar.gz
+tar -xzf kzm.tar.gz
 sh install.sh
 ```
 
