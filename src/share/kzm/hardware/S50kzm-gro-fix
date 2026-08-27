@@ -1,0 +1,18 @@
+#!/bin/sh
+
+FIX=/opt/libexec/kzm/mediatek-gro-fix.sh
+
+case "${1:-start}" in
+    start|restart)
+        [ -x "$FIX" ] && "$FIX" apply >/dev/null 2>&1 || true
+        ;;
+    status)
+        [ -x "$FIX" ] && "$FIX" status
+        ;;
+    stop)
+        ;;
+    *)
+        printf 'Usage: %s {start|stop|restart|status}\n' "$0" >&2
+        exit 2
+        ;;
+esac

@@ -36,7 +36,10 @@ sh "$PROJECT_DIR/install.sh" --root "$TEST_ROOT" >/dev/null
 [ -x "$TEST_ROOT/opt/libexec/kzm/router-canary-suite.sh" ]
 [ -f "$TEST_ROOT/opt/share/kzm/canary-pass.strategy" ]
 [ -f "$TEST_ROOT/opt/share/kzm/test-targets.base.tsv" ]
-[ "$(KZM_ROOT="$TEST_ROOT" "$TEST_ROOT/opt/bin/kzm" version)" = "0.8.0" ]
+[ "$(KZM_ROOT="$TEST_ROOT" "$TEST_ROOT/opt/bin/kzm" version)" = "0.8.1" ]
+[ -x "$TEST_ROOT/opt/libexec/kzm/mediatek-gro-fix.sh" ]
+[ -x "$TEST_ROOT/opt/etc/init.d/S50kzm-gro-fix" ]
+[ -x "$TEST_ROOT/opt/etc/ndm/netfilter.d/090-kzm-gro-fix.sh" ]
 KZM_ROOT="$TEST_ROOT" "$TEST_ROOT/opt/bin/kzm" test status | grep -q 'Canary inactive'
 KZM_ROOT="$TEST_ROOT" "$TEST_ROOT/opt/bin/kzm" status | grep -q 'YouTube:.*QUIC выключен'
 for youtube_app_domain in youtube.com googlevideo.com youtubei.googleapis.com youtubei-att.googleapis.com youtube.googleapis.com ytimg.com ggpht.com; do

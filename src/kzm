@@ -2,7 +2,7 @@
 
 set -u
 
-KZM_VERSION="0.8.0"
+KZM_VERSION="0.8.1"
 KZM_ROOT="${KZM_ROOT:-}"
 KZM_PREFIX="${KZM_PREFIX:-/opt}"
 KZM_BASE="${KZM_ROOT}${KZM_PREFIX}"
@@ -694,7 +694,9 @@ render_quic_strategy() {
         printf '%s\n' '--filter-udp=443'
         printf '%s\n' "--hostlist=$YOUTUBE_LIST"
         printf '%s\n' '--dpi-desync=fake'
-        printf '%s\n' '--dpi-desync-repeats=11'
+        # MT7981 loses UDP around NFQUEUE when GRO is active. One fake is
+        # sufficient for the tested YouTube path and avoids long QUIC stalls.
+        printf '%s\n' '--dpi-desync-repeats=1'
         printf '%s\n' "--dpi-desync-fake-quic=$FAKE_DIR/quic_initial_www_google_com.bin"
     } > "$quic_target"
 }
@@ -831,6 +833,10 @@ restart_service() {
         warn "не найден исполняемый $NFQWS_INIT"
         return 1
     }
+    if [ -x "$KZM_LIBEXEC/mediatek-gro-fix.sh" ]; then
+        "$KZM_LIBEXEC/mediatek-gro-fix.sh" apply ||
+            warn "не удалось применить MT7981 GRO-fix; QUIC может терять пакеты"
+    fi
     "$NFQWS_INIT" restart
 }
 
