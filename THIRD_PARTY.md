@@ -14,7 +14,7 @@
 
 ## Optional Telegram proxy components
 
-KZM 0.8.0 can download, at the user's explicit request, one of these upstream
+Starting with KZM 0.8.0, the manager can download, at the user's explicit request, one of these upstream
 release assets for `aarch64` Keenetic devices:
 
 - `d0mhate/-tg-ws-proxy-Manager-go` — SOCKS5 mode; experimental because its WSS

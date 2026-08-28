@@ -695,8 +695,9 @@ render_quic_strategy() {
         printf '%s\n' '--filter-udp=443'
         printf '%s\n' "--hostlist=$YOUTUBE_LIST"
         printf '%s\n' '--dpi-desync=fake'
-        # MT7981 loses UDP around NFQUEUE when GRO is active. One fake is
-        # sufficient for the tested YouTube path and avoids long QUIC stalls.
+        # MT7981 loses UDP around NFQUEUE when GRO is active. One fake reduced
+        # fallback latency on the tested path; QUIC success still depends on
+        # the provider and the client may fall back to TCP.
         printf '%s\n' '--dpi-desync-repeats=1'
         printf '%s\n' "--dpi-desync-fake-quic=$FAKE_DIR/quic_initial_www_google_com.bin"
     } > "$quic_target"

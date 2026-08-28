@@ -36,7 +36,12 @@ sh "$PROJECT_DIR/install.sh" --root "$TEST_ROOT" >/dev/null
 [ -x "$TEST_ROOT/opt/libexec/kzm/router-canary-suite.sh" ]
 [ -f "$TEST_ROOT/opt/share/kzm/canary-pass.strategy" ]
 [ -f "$TEST_ROOT/opt/share/kzm/test-targets.base.tsv" ]
-[ "$(KZM_ROOT="$TEST_ROOT" "$TEST_ROOT/opt/bin/kzm" version)" = "0.8.1" ]
+release_version=$(sed -n '1p' "$PROJECT_DIR/VERSION")
+component_version=$(sed -n 's/^KZM_VERSION="\([^"]*\)"$/\1/p' \
+    "$PROJECT_DIR/src/libexec/kzm/component-manager.sh")
+[ "$release_version" = "0.8.1" ]
+[ "$(KZM_ROOT="$TEST_ROOT" "$TEST_ROOT/opt/bin/kzm" version)" = "$release_version" ]
+[ "$component_version" = "$release_version" ]
 [ -x "$TEST_ROOT/opt/libexec/kzm/mediatek-gro-fix.sh" ]
 [ -x "$TEST_ROOT/opt/etc/init.d/S50kzm-gro-fix" ]
 [ -x "$TEST_ROOT/opt/etc/ndm/netfilter.d/090-kzm-gro-fix.sh" ]
@@ -310,7 +315,7 @@ CANARY_STATE_FILE="$CANARY_TEST_STATE" \
 CANARY_LOCK_DIR="$CANARY_TEST_LOCK" \
 CANARY_PID_FILE="$CANARY_TEST_PID" \
 CANARY_WATCHDOG_PID_FILE="$CANARY_TEST_WATCHDOG_PID" \
-    "$PROJECT_DIR/tests/router-canary.sh" watchdog 120 "$CANARY_TEST_RUN_ID" &
+    "$CANARY_SCRIPT_CANONICAL" watchdog 120 "$CANARY_TEST_RUN_ID" &
 canary_nat_watchdog_pid=$!
 canary_nat_watchdog_started=$(canary_proc_starttime "$canary_nat_watchdog_pid")
 canary_nat_watchdog_exe=$(readlink "/proc/$canary_nat_watchdog_pid/exe")

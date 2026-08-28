@@ -14,6 +14,7 @@ KZM_BASE="${KZM_BASE:-${KZM_ROOT}${KZM_PREFIX}}"
 KZM_COMPONENT="${KZM_COMPONENT:-}"
 KZM_PROC_ROOT="${KZM_PROC_ROOT:-/proc}"
 KZM_NETSTAT="${KZM_NETSTAT:-netstat}"
+KZM_IP_BIN="${KZM_IP_BIN:-ip}"
 
 PATH="$KZM_BASE/usr/sbin:$KZM_BASE/usr/bin:$KZM_BASE/sbin:$KZM_BASE/bin:/opt/usr/sbin:/opt/usr/bin:/opt/sbin:/opt/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 export PATH
@@ -729,7 +730,7 @@ port_conflicts() {
 }
 
 host_is_assigned_to_lan_bridge() {
-    _kzm_ip_bin=$(command -v ip 2>/dev/null) || return 2
+    _kzm_ip_bin=$(command -v "$KZM_IP_BIN" 2>/dev/null) || return 2
     for _kzm_lan_bridge in br0 br-lan; do
         _kzm_ip_output=$("$_kzm_ip_bin" -o -4 addr show dev "$_kzm_lan_bridge" scope global 2>/dev/null || true)
         if printf '%s\n' "$_kzm_ip_output" | awk -v wanted_host="$HOST" '
@@ -1029,7 +1030,7 @@ start_service() {
     [ -x "$BINARY" ] || die "бинарный файл не исполняемый: $BINARY"
     if production_mode; then
         command -v "$KZM_NETSTAT" >/dev/null 2>&1 || die "для проверки порта нужен netstat"
-        command -v ip >/dev/null 2>&1 || die "для проверки LAN-адреса нужен ip"
+        command -v "$KZM_IP_BIN" >/dev/null 2>&1 || die "для проверки LAN-адреса нужен ip"
     elif ! allow_test_artifacts; then
         die "для запуска в KZM_ROOT требуется KZM_ALLOW_TEST_ARTIFACTS=1"
     fi

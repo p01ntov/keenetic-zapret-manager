@@ -71,6 +71,16 @@ fail() {
     exit 1
 }
 
+sleep_briefly() {
+    if command -v usleep >/dev/null 2>&1; then
+        usleep 100000
+    elif sleep 0.1 2>/dev/null; then
+        :
+    else
+        sleep 1
+    fi
+}
+
 assert_file() {
     [ -f "$1" ] || fail "expected file: $1"
 }
@@ -99,7 +109,7 @@ wait_for_pid_exit() {
     waited=0
     while kill -0 "$1" 2>/dev/null; do
         [ "$waited" -lt 50 ] || return 1
-        sleep 0.1
+        sleep_briefly
         waited=$((waited + 1))
     done
 }
@@ -285,7 +295,13 @@ cleanup_proxy_fixture() {
         orphan_wait=0
         while [ ! -L "\${KZM_PROC_ROOT:?}/\$orphan_pid/exe" ] && \
                 [ "\$orphan_wait" -lt 50 ]; do
-            sleep 0.1
+            if command -v usleep >/dev/null 2>&1; then
+                usleep 100000
+            elif sleep 0.1 2>/dev/null; then
+                :
+            else
+                sleep 1
+            fi
             orphan_wait=\$((orphan_wait + 1))
         done
     fi
@@ -303,12 +319,6 @@ make_proxy_fixture "$FIXTURES/rust-v1.bin" KZM_RUST_V1 1.0.0
 make_proxy_fixture "$FIXTURES/rust-v2.bin" KZM_RUST_V2 2.0.0
 make_proxy_fixture "$FIXTURES/mtproto-v1.bin" KZM_MTPROTO_V1 0.1.0
 make_proxy_fixture "$FIXTURES/mtproto-v2.bin" KZM_MTPROTO_V2 0.2.0
-
-mkdir -p "$FIXTURES/rust-v1" "$FIXTURES/rust-v2"
-cp "$FIXTURES/rust-v1.bin" "$FIXTURES/rust-v1/tg-ws-proxy"
-cp "$FIXTURES/rust-v2.bin" "$FIXTURES/rust-v2/tg-ws-proxy"
-tar -czf "$FIXTURES/rust-v1.tar.gz" -C "$FIXTURES/rust-v1" tg-ws-proxy
-tar -czf "$FIXTURES/rust-v2.tar.gz" -C "$FIXTURES/rust-v2" tg-ws-proxy
 
 make_ipk_fixture() {
     fixture_id=$1
@@ -331,31 +341,63 @@ EOF
         debian-binary control.tar.gz data.tar.gz
 }
 
-make_ipk_fixture v1 0.1.0 "$FIXTURES/mtproto-v1.bin"
-make_ipk_fixture v2 0.2.0 "$FIXTURES/mtproto-v2.bin"
-make_ipk_fixture bad-package 0.3.1 "$FIXTURES/mtproto-v2.bin" unexpected-package
-make_ipk_fixture bad-architecture 0.3.2 "$FIXTURES/mtproto-v2.bin" tg-ws-proxy mipsel-3.4
-make_ipk_fixture bad-version 9.9.9 "$FIXTURES/mtproto-v2.bin"
-
-# These hostile archives contain `../../KZM_TRAVERSAL_SENTINEL` members. Keep
-# only the unsafe tar payloads as small base64 fixtures so the suite itself
-# needs only BusyBox tar; GNU tar --transform is deliberately not required.
 command -v base64 >/dev/null 2>&1 || fail "base64 is required for fixtures"
 base64 -d "$PROJECT_DIR/tests/fixtures/components-rust-traversal.tar.gz.b64" \
     > "$FIXTURES/rust-traversal.tar.gz" || fail "cannot decode Rust traversal fixture"
-traversal_work="$FIXTURES/ipk-traversal"
-mkdir -p "$traversal_work/control" "$traversal_work/outer"
-cat > "$traversal_work/control/control" <<'EOF'
+
+# Full GNU/bsdtar installations create the ordinary fixtures on demand. The
+# deliberately small Keenetic tar build supports only list/extract, so it uses
+# the same prebuilt fixtures from a checked-in base64 bundle.
+tar_create_probe="$TEST_ROOT/tar-create-probe.tar"
+if tar -cf "$tar_create_probe" -C "$FIXTURES" rust-v1.bin >/dev/null 2>&1; then
+    rm -f "$tar_create_probe"
+    mkdir -p "$FIXTURES/rust-v1" "$FIXTURES/rust-v2"
+    cp "$FIXTURES/rust-v1.bin" "$FIXTURES/rust-v1/tg-ws-proxy"
+    cp "$FIXTURES/rust-v2.bin" "$FIXTURES/rust-v2/tg-ws-proxy"
+    tar -czf "$FIXTURES/rust-v1.tar.gz" -C "$FIXTURES/rust-v1" tg-ws-proxy
+    tar -czf "$FIXTURES/rust-v2.tar.gz" -C "$FIXTURES/rust-v2" tg-ws-proxy
+
+    make_ipk_fixture v1 0.1.0 "$FIXTURES/mtproto-v1.bin"
+    make_ipk_fixture v2 0.2.0 "$FIXTURES/mtproto-v2.bin"
+    make_ipk_fixture bad-package 0.3.1 "$FIXTURES/mtproto-v2.bin" unexpected-package
+    make_ipk_fixture bad-architecture 0.3.2 "$FIXTURES/mtproto-v2.bin" tg-ws-proxy mipsel-3.4
+    make_ipk_fixture bad-version 9.9.9 "$FIXTURES/mtproto-v2.bin"
+
+    # These hostile archives contain `../../KZM_TRAVERSAL_SENTINEL` members.
+    # Keep only the unsafe payload as base64: GNU tar --transform is not needed.
+    traversal_work="$FIXTURES/ipk-traversal"
+    mkdir -p "$traversal_work/control" "$traversal_work/outer"
+    cat > "$traversal_work/control/control" <<'EOF'
 Package: tg-ws-proxy
 Version: 9.9.9
 Architecture: aarch64-3.10
 EOF
-printf '2.0\n' > "$traversal_work/outer/debian-binary"
-tar -czf "$traversal_work/outer/control.tar.gz" -C "$traversal_work/control" .
-base64 -d "$PROJECT_DIR/tests/fixtures/components-mtproto-data-traversal.tar.gz.b64" \
-    > "$traversal_work/outer/data.tar.gz" || fail "cannot decode IPK traversal payload"
-tar -czf "$FIXTURES/mtproto-traversal.ipk" -C "$traversal_work/outer" \
-    debian-binary control.tar.gz data.tar.gz
+    printf '2.0\n' > "$traversal_work/outer/debian-binary"
+    tar -czf "$traversal_work/outer/control.tar.gz" -C "$traversal_work/control" .
+    base64 -d "$PROJECT_DIR/tests/fixtures/components-mtproto-data-traversal.tar.gz.b64" \
+        > "$traversal_work/outer/data.tar.gz" || fail "cannot decode IPK traversal payload"
+    tar -czf "$FIXTURES/mtproto-traversal.ipk" -C "$traversal_work/outer" \
+        debian-binary control.tar.gz data.tar.gz
+else
+    rm -f "$tar_create_probe"
+    fixture_bundle="$TEST_ROOT/components-release-archives.tar.gz"
+    fixture_bundle_list="$TEST_ROOT/components-release-archives.list"
+    base64 -d "$PROJECT_DIR/tests/fixtures/components-release-archives.tar.gz.b64" \
+        > "$fixture_bundle" || fail "cannot decode component archive fixtures"
+    tar -tzf "$fixture_bundle" > "$fixture_bundle_list" || \
+        fail "cannot list component archive fixtures"
+    [ "$(awk 'END { print NR+0 }' "$fixture_bundle_list")" -eq 8 ] || \
+        fail "component archive fixture bundle has unexpected contents"
+    for fixture_archive in rust-v1.tar.gz rust-v2.tar.gz \
+            mtproto-v1.ipk mtproto-v2.ipk mtproto-bad-package.ipk \
+            mtproto-bad-architecture.ipk mtproto-bad-version.ipk \
+            mtproto-traversal.ipk; do
+        grep -Fqx "$fixture_archive" "$fixture_bundle_list" || \
+            fail "component archive fixture is missing: $fixture_archive"
+    done
+    tar -xzf "$fixture_bundle" -C "$FIXTURES" || \
+        fail "cannot extract component archive fixtures"
+fi
 
 cat > "$MOCK_BIN/curl" <<'EOF'
 #!/bin/sh
@@ -465,6 +507,7 @@ mkdir -p "$KZM_PROC_ROOT" "$KZM_TEST_LISTEN_DIR"
 export PATH TMPDIR KZM_ROOT="$TEST_ROOT" KZM_GITHUB_API_BASE=https://mock.invalid \
     KZM_CURL_BIN="$MOCK_BIN/curl" KZM_ALLOW_TEST_ARTIFACTS=1 MOCK_LOG FIXTURES \
     KZM_PROC_ROOT KZM_TEST_LISTEN_DIR KZM_TEST_PID_LOG KZM_NETSTAT KZM_TEST_REAL_OD \
+    KZM_IP_BIN="$MOCK_BIN/ip" \
     KZM_TEST_LAUNCH_LOG="$LAUNCH_LOG"
 
 # Test-only validation must never be enabled through a symlinked KZM_ROOT or
@@ -499,7 +542,8 @@ for unsafe_root in "$root_link" "$opt_link_root"; do
         > "$TEST_ROOT/rejected-root-${unsafe_root##*.}.txt" 2>&1; then
         fail "test mode accepted a symlink-escaping KZM_ROOT: $unsafe_root"
     fi
-    assert_contains "$TEST_ROOT/rejected-root-${unsafe_root##*.}.txt" 'aarch64 Keenetic'
+    assert_contains "$TEST_ROOT/rejected-root-${unsafe_root##*.}.txt" \
+        'безопасного изолированного KZM_ROOT'
 done
 
 sh "$PROJECT_DIR/install.sh" --root "$TEST_ROOT" >/dev/null

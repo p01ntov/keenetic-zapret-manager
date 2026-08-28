@@ -56,6 +56,16 @@ fail() {
     exit 1
 }
 
+sleep_briefly() {
+    if command -v usleep >/dev/null 2>&1; then
+        usleep 100000
+    elif sleep 0.1 2>/dev/null; then
+        :
+    else
+        sleep 1
+    fi
+}
+
 path_exists() {
     [ -e "$1" ] || [ -L "$1" ]
 }
@@ -434,7 +444,7 @@ lock_wait=0
 while [ ! -f "$TEST_ROOT/opt/.kzm-install.lock/owner" ]; do
     lock_wait=$((lock_wait + 1))
     [ "$lock_wait" -lt 50 ] || fail "first installer did not acquire its lock"
-    sleep 0.1
+    sleep_briefly
 done
 if sh "$PROJECT_DIR/install.sh" --root "$TEST_ROOT" >"$SECOND_LOG" 2>&1; then
     fail "concurrent installer unexpectedly succeeded"

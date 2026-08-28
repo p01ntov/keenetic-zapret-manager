@@ -1,4 +1,4 @@
-# Telegram-прокси в KZM 0.8.0
+# Telegram-прокси в KZM
 
 Telegram-прокси — необязательные независимые компоненты Keenetic Manager.
 Они не являются стратегиями Zapret и не участвуют в цепочках `nfqws`.
@@ -13,7 +13,7 @@ Telegram-прокси — необязательные независимые к
 | `rust` | [valnesfjord/tg-ws-proxy-rs](https://github.com/valnesfjord/tg-ws-proxy-rs) | MTProto | 2443 | рекомендуется |
 | `mtproto` | [spatiumstas/tg-ws-proxy-go](https://github.com/spatiumstas/tg-ws-proxy-go) | MTProto | 1443 | экспериментально |
 
-В версии 0.8.0 поддерживается только Keenetic `aarch64`/`arm64`. Разные порты
+Начиная с версии 0.8.0 поддерживается только Keenetic `aarch64`/`arm64`. Разные порты
 позволяют установить все варианты одновременно, однако обычно достаточно
 одного. Для новой установки рекомендуется сначала попробовать `rust`.
 

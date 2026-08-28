@@ -31,6 +31,7 @@ GITHUB_API_BASE="${KZM_GITHUB_API_BASE:-https://api.github.com}"
 CURL_BIN="${KZM_CURL_BIN:-$(command -v curl 2>/dev/null || true)}"
 TAR_BIN="${KZM_TAR_BIN:-$(command -v tar 2>/dev/null || true)}"
 SHA256_BIN="${KZM_SHA256_BIN:-$(command -v sha256sum 2>/dev/null || true)}"
+IP_BIN="${KZM_IP_BIN:-$(command -v ip 2>/dev/null || true)}"
 MAX_DOWNLOAD_BYTES="${KZM_MAX_DOWNLOAD_BYTES:-33554432}"
 MAX_BINARY_BYTES="${KZM_MAX_BINARY_BYTES:-33554432}"
 MAX_LIST_BYTES="${KZM_MAX_LIST_BYTES:-1048576}"
@@ -73,6 +74,12 @@ allow_test_artifacts() {
         kzm-components-test.*|kzm-components-live|kzm-components-live.*|kzm-components-live-*) return 0 ;;
         *) return 1 ;;
     esac
+}
+
+validate_test_artifact_mode() {
+    [ "${KZM_ALLOW_TEST_ARTIFACTS:-0}" = "1" ] || return 0
+    allow_test_artifacts || \
+        die "тестовые assets разрешены только внутри безопасного изолированного KZM_ROOT"
 }
 
 cleanup_tmp() {
@@ -420,10 +427,10 @@ config_value() {
 
 detect_lan_ip() {
     lan_ip=""
-    if command -v ip >/dev/null 2>&1; then
-        lan_ip=$(ip -o -4 addr show dev br0 scope global 2>/dev/null | awk 'NR == 1 { split($4, a, "/"); print a[1] }')
+    if [ -n "$IP_BIN" ] && [ -x "$IP_BIN" ]; then
+        lan_ip=$("$IP_BIN" -o -4 addr show dev br0 scope global 2>/dev/null | awk 'NR == 1 { split($4, a, "/"); print a[1] }')
         if [ -z "$lan_ip" ]; then
-            lan_ip=$(ip -o -4 addr show dev br-lan scope global 2>/dev/null | awk 'NR == 1 { split($4, a, "/"); print a[1] }')
+            lan_ip=$("$IP_BIN" -o -4 addr show dev br-lan scope global 2>/dev/null | awk 'NR == 1 { split($4, a, "/"); print a[1] }')
         fi
     fi
     case "$lan_ip" in
@@ -770,7 +777,16 @@ extract_binary() {
             if [ -z "$TAR_BIN" ] || [ ! -x "$TAR_BIN" ]; then
                 die "нужен tar"
             fi
-            limited_list_command "$TAR_BIN" -tf "$extract_archive" > "$TMP_DIR/ipk.list" 2> "$TMP_DIR/ipk.err" || die "повреждён или слишком большой IPK"
+            ipk_extract_option=-xf
+            if limited_list_command "$TAR_BIN" -tf "$extract_archive" \
+                    > "$TMP_DIR/ipk.list" 2> "$TMP_DIR/ipk.err"; then
+                :
+            elif limited_list_command "$TAR_BIN" -tzf "$extract_archive" \
+                    > "$TMP_DIR/ipk.list" 2> "$TMP_DIR/ipk.err"; then
+                ipk_extract_option=-xzf
+            else
+                die "повреждён или слишком большой IPK"
+            fi
             [ ! -s "$TMP_DIR/ipk.err" ] || die "tar сообщил о небезопасном или нестандартном IPK"
             archive_names_safe "$TMP_DIR/ipk.list" || die "небезопасные пути внутри IPK"
             [ "$(awk 'END { print NR+0 }' "$TMP_DIR/ipk.list")" -le 16 ] || die "слишком много записей внутри IPK"
@@ -779,10 +795,10 @@ extract_binary() {
             awk '$0 == "data.tar.gz" || $0 == "./data.tar.gz" { count++ } END { exit(count == 1 ? 0 : 1) }' \
                 "$TMP_DIR/ipk.list" || die "в IPK нет единственного data.tar.gz"
             mkdir -p "$TMP_DIR/ipk" "$TMP_DIR/control" "$TMP_DIR/data"
-            limited_archive_command "$TAR_BIN" -xf "$extract_archive" -C "$TMP_DIR/ipk" control.tar.gz 2>/dev/null || \
-                limited_archive_command "$TAR_BIN" -xf "$extract_archive" -C "$TMP_DIR/ipk" ./control.tar.gz || die "не удалось извлечь control.tar.gz"
-            limited_archive_command "$TAR_BIN" -xf "$extract_archive" -C "$TMP_DIR/ipk" data.tar.gz 2>/dev/null || \
-                limited_archive_command "$TAR_BIN" -xf "$extract_archive" -C "$TMP_DIR/ipk" ./data.tar.gz || die "не удалось извлечь data.tar.gz"
+            limited_archive_command "$TAR_BIN" "$ipk_extract_option" "$extract_archive" -C "$TMP_DIR/ipk" control.tar.gz 2>/dev/null || \
+                limited_archive_command "$TAR_BIN" "$ipk_extract_option" "$extract_archive" -C "$TMP_DIR/ipk" ./control.tar.gz || die "не удалось извлечь control.tar.gz"
+            limited_archive_command "$TAR_BIN" "$ipk_extract_option" "$extract_archive" -C "$TMP_DIR/ipk" data.tar.gz 2>/dev/null || \
+                limited_archive_command "$TAR_BIN" "$ipk_extract_option" "$extract_archive" -C "$TMP_DIR/ipk" ./data.tar.gz || die "не удалось извлечь data.tar.gz"
             if [ ! -f "$TMP_DIR/ipk/control.tar.gz" ] || [ -L "$TMP_DIR/ipk/control.tar.gz" ]; then
                 die "небезопасный control.tar.gz внутри IPK"
             fi
@@ -940,6 +956,7 @@ install_component() {
     install_component_id=$1
     install_mode=${2:-install}
     component_valid "$install_component_id" || die "компоненты: socks5, rust или mtproto"
+    validate_test_artifact_mode
     validate_resource_limits
     if [ -z "$CURL_BIN" ] || [ ! -x "$CURL_BIN" ]; then
         die "нужен curl"
