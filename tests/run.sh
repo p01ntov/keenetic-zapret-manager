@@ -371,7 +371,7 @@ grep -q 'Настроить Discord' "$TEST_ROOT/strategy-menu.txt"
 printf '3\n\n\n' | KZM_ROOT="$TEST_ROOT" "$TEST_ROOT/opt/bin/kzm" > "$TEST_ROOT/test-menu.txt"
 grep -q 'Проверить текущую стратегию на полном списке' "$TEST_ROOT/test-menu.txt"
 grep -q 'Найти лучшую стратегию v + Flowseal' "$TEST_ROOT/test-menu.txt"
-grep -q 'Live-тест YouTube на телефоне: TCP-профиль или QUIC' "$TEST_ROOT/test-menu.txt"
+grep -q 'Live-тест YouTube на устройстве: TCP-профиль или QUIC' "$TEST_ROOT/test-menu.txt"
 
 cat > "$TEST_ROOT/opt/etc/kzapret-manager/kzm.conf" <<EOF
 GENERAL_URL="file://$PROJECT_DIR/tests/fixtures/Strategies.md"
@@ -413,22 +413,18 @@ grep -q '^50-discord-media|.*|native-alias|' "$TEST_ROOT/opt/etc/kzapret-manager
 [ ! -e "$TEST_ROOT/opt/etc/kzapret-manager/strategies/discord-scripts/50-discord.strategy" ]
 [ -f "$TEST_ROOT/opt/etc/kzapret-manager/strategies/extras/game.strategy" ]
 
-# A phone-only YouTube test must never default to the SSH computer address.
-# Select Yv08 numerically, then leave the phone prompt empty so canary is not started.
+# A YouTube live test may target any device and offers the SSH client as a default.
+# Select Yv08 numerically, then submit an invalid address so no canary is started.
 mkdir -p "$TEST_ROOT/opt/etc/kzapret-manager/tools"
 cp "$TEST_ROOT/opt/usr/bin/nfqws" "$TEST_ROOT/opt/etc/kzapret-manager/tools/nfqws"
 chmod +x "$TEST_ROOT/opt/etc/kzapret-manager/tools/nfqws"
-printf '3\n5\n1\n2\n\n\n\n\n' | SSH_CLIENT='192.0.2.55 2222 22' KZM_ROOT="$TEST_ROOT" \
-    "$TEST_ROOT/opt/bin/kzm" > "$TEST_ROOT/youtube-phone-canary-menu.txt"
-grep -q 'Проверить TCP-профиль YvNN' "$TEST_ROOT/youtube-phone-canary-menu.txt"
-grep -q '1) Yv01' "$TEST_ROOT/youtube-phone-canary-menu.txt"
-grep -q '2) Yv08' "$TEST_ROOT/youtube-phone-canary-menu.txt"
-grep -q 'Нужен IPv4 телефона.*не IP компьютера с SSH' "$TEST_ROOT/youtube-phone-canary-menu.txt"
-grep -q 'IPv4 телефона (Wi-Fi):' "$TEST_ROOT/youtube-phone-canary-menu.txt"
-if grep -Fq 'IPv4 тестового устройства [192.0.2.55]' "$TEST_ROOT/youtube-phone-canary-menu.txt"; then
-    echo "YouTube phone canary offered the SSH client IP" >&2
-    exit 1
-fi
+printf '3\n5\n1\n2\nnot-an-ip\n\n\n\n' | SSH_CLIENT='192.0.2.55 2222 22' KZM_ROOT="$TEST_ROOT" \
+    "$TEST_ROOT/opt/bin/kzm" > "$TEST_ROOT/youtube-device-canary-menu.txt"
+grep -q 'Проверить TCP-профиль YvNN' "$TEST_ROOT/youtube-device-canary-menu.txt"
+grep -q '1) Yv01' "$TEST_ROOT/youtube-device-canary-menu.txt"
+grep -q '2) Yv08' "$TEST_ROOT/youtube-device-canary-menu.txt"
+grep -Fq 'IPv4 тестового устройства [192.0.2.55]' "$TEST_ROOT/youtube-device-canary-menu.txt"
+grep -q 'IPv4 не указан или введён неверно' "$TEST_ROOT/youtube-device-canary-menu.txt"
 
 general_menu_count=$(find "$TEST_ROOT/opt/etc/kzapret-manager/strategies/general" -type f -name 'v*.strategy' | awk 'END { print NR+0 }')
 flow_alt_line=$(awk -F'|' '$1 == "general_ALT7" { print NR; exit }' "$TEST_ROOT/opt/etc/kzapret-manager/strategies/flowseal/index.tsv")

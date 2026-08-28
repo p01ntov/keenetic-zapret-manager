@@ -1520,7 +1520,7 @@ doctor_command() {
         else
             say "  WARN IPv6-маршрут активен, но IPV6_ENABLED не равен 1"
         fi
-        say "  INFO двухминутный canary телефона проверяет только IPv4"
+        say "  INFO двухминутный canary устройства проверяет только IPv4"
     fi
     [ "$general_count" -gt 0 ] || failures=$((failures + 1))
     [ "$flowseal_count" -gt 0 ] || failures=$((failures + 1))
@@ -1934,7 +1934,7 @@ canary_live_start() {
     "$KZM_LIBEXEC/router-canary.sh" start
     case "$test_kind" in
         voice) say "Выйдите и снова войдите в Discord ГС, затем проверьте: kzm test status" ;;
-        quic) say "Оставьте на телефоне только Wi-Fi, отключите VPN, принудительно закройте YouTube, откройте его заново и запустите новое видео; затем: kzm test status" ;;
+        quic) say "Оставьте на тестовом устройстве только подключение через этот Keenetic, отключите VPN, полностью закройте YouTube или браузер, откройте заново и запустите новое видео; затем: kzm test status" ;;
     esac
 }
 
@@ -1979,7 +1979,7 @@ canary_youtube_live_start() {
     QUEUE_NUM="$CANARY_QUEUE_NUM" \
     TTL="$test_ttl" \
     "$KZM_LIBEXEC/router-canary.sh" start
-    say "На телефоне оставьте Wi-Fi без VPN, принудительно закройте YouTube, откройте заново и запустите новое видео; затем: kzm test status"
+    say "Оставьте на тестовом устройстве только подключение через этот Keenetic, отключите VPN, полностью закройте YouTube или браузер, откройте заново и запустите новое видео; затем: kzm test status"
 }
 
 canary_status() {
@@ -2406,20 +2406,12 @@ router_mihomo_transparent_running() {
 }
 
 prompt_client_ipv4() {
-    client_kind=${1:-device}
-    if [ "$client_kind" = phone ]; then
+    default_client_ip=$(detect_ssh_client_ip)
+    if ! ipv4_valid "$default_client_ip"; then
         default_client_ip=
-        say "Нужен IPv4 телефона из свойств Wi-Fi, не IP компьютера с SSH."
-    else
-        default_client_ip=$(detect_ssh_client_ip)
-        if ! ipv4_valid "$default_client_ip"; then
-            default_client_ip=
-        fi
     fi
     if [ -n "$default_client_ip" ]; then
         printf 'IPv4 тестового устройства [%s]: ' "$default_client_ip"
-    elif [ "$client_kind" = phone ]; then
-        printf 'IPv4 телефона (Wi-Fi): '
     else
         printf 'IPv4 тестового устройства: '
     fi
@@ -2434,16 +2426,13 @@ prompt_client_ipv4() {
 start_live_test_interactive() {
     live_kind=$1
     if [ "$live_kind" = quic ]; then
-        say "Тест: IPv4/UDP 443 одного телефона, 120 с, без apply/restart, с автооткатом."
+        say "Тест: IPv4/UDP 443 одного устройства, 120 с, без apply/restart, с автооткатом."
     fi
     ensure_test_engine_interactive || return 1
-    case "$live_kind" in
-        quic) prompt_client_ipv4 phone || return 1 ;;
-        *) prompt_client_ipv4 device || return 1 ;;
-    esac
+    prompt_client_ipv4 || return 1
     case "$live_kind" in
         voice) say "На 120 секунд только устройство $MENU_CLIENT_IP будет направлено в тест Discord voice." ;;
-        quic) say "На 120 секунд IPv4 UDP/443 телефона $MENU_CLIENT_IP попадёт в тестовую очередь; nfqws изменяет только QUIC доменов YouTube." ;;
+        quic) say "На 120 секунд IPv4 UDP/443 устройства $MENU_CLIENT_IP попадёт в тестовую очередь; nfqws изменяет только QUIC доменов YouTube." ;;
     esac
     canary_live_start "$live_kind" "$MENU_CLIENT_IP" 120
 }
@@ -2475,15 +2464,15 @@ start_youtube_tcp_test_interactive() {
         return 0
     fi
     live_youtube_profile=$MENU_SELECTED
-    prompt_client_ipv4 phone || return 1
-    say "На 120 секунд только TCP/443 телефона $MENU_CLIENT_IP попадёт в профиль $live_youtube_profile."
+    prompt_client_ipv4 || return 1
+    say "На 120 секунд только TCP/443 устройства $MENU_CLIENT_IP попадёт в профиль $live_youtube_profile."
     canary_youtube_live_start "$MENU_CLIENT_IP" "$live_youtube_profile" 120
 }
 
 youtube_live_test_menu() {
     while :; do
         menu_clear
-        printf 'Live-тест YouTube на одном телефоне\n\n'
+        printf 'Live-тест YouTube на одном устройстве\n\n'
         printf '  Временный тест: %s\n\n' "$(live_test_status_ru)"
         printf '  1) Проверить TCP-профиль YvNN (выбор профиля по номеру, 120 с)\n'
         printf '  2) Проверить QUIC YouTube (UDP/443, 120 с)\n'
@@ -2917,7 +2906,7 @@ canary_menu() {
         printf '  2) Найти лучшую стратегию v + Flowseal (долгий тест)\n'
         printf '  3) Подобрать стратегию для своих доменов\n'
         printf '  4) Проверить голос и медиа Discord на одном устройстве\n'
-        printf '  5) Live-тест YouTube на телефоне: TCP-профиль или QUIC\n'
+        printf '  5) Live-тест YouTube на устройстве: TCP-профиль или QUIC\n'
         printf '  6) Показать состояние временного теста\n'
         printf '  7) Обновить отдельный тестовый модуль\n'
         if [ -s "$LAST_TEST_RESULT" ]; then
