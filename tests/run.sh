@@ -39,7 +39,7 @@ sh "$PROJECT_DIR/install.sh" --root "$TEST_ROOT" >/dev/null
 release_version=$(sed -n '1p' "$PROJECT_DIR/VERSION")
 component_version=$(sed -n 's/^KZM_VERSION="\([^"]*\)"$/\1/p' \
     "$PROJECT_DIR/src/libexec/kzm/component-manager.sh")
-[ "$release_version" = "0.8.1" ]
+[ "$release_version" = "0.8.2" ]
 [ "$(KZM_ROOT="$TEST_ROOT" "$TEST_ROOT/opt/bin/kzm" version)" = "$release_version" ]
 [ "$component_version" = "$release_version" ]
 [ -x "$TEST_ROOT/opt/libexec/kzm/mediatek-gro-fix.sh" ]
@@ -359,19 +359,19 @@ rm -rf "$CANARY_TEST_LOCK"
 export KZM_DEFAULT_COMMAND=zapret
 
 printf '\n' | KZM_ROOT="$TEST_ROOT" "$TEST_ROOT/opt/bin/kzm" > "$TEST_ROOT/main-menu.txt"
-grep -q 'Меню стратегий' "$TEST_ROOT/main-menu.txt"
-grep -q 'Меню тестирования стратегий' "$TEST_ROOT/main-menu.txt"
-grep -q 'Применить выбранные настройки' "$TEST_ROOT/main-menu.txt"
+grep -q '1) Стратегии' "$TEST_ROOT/main-menu.txt"
+grep -q '3) Тестирование стратегий' "$TEST_ROOT/main-menu.txt"
+grep -q 'Сохранить и применить сейчас' "$TEST_ROOT/main-menu.txt"
 grep -q 'Мои сайты и IP/подсети' "$TEST_ROOT/main-menu.txt"
 
 printf '1\n\n\n' | KZM_ROOT="$TEST_ROOT" "$TEST_ROOT/opt/bin/kzm" > "$TEST_ROOT/strategy-menu.txt"
-grep -q 'область действия' "$TEST_ROOT/strategy-menu.txt"
+grep -q 'Область действия' "$TEST_ROOT/strategy-menu.txt"
 grep -q 'Настроить Discord' "$TEST_ROOT/strategy-menu.txt"
 
 printf '3\n\n\n' | KZM_ROOT="$TEST_ROOT" "$TEST_ROOT/opt/bin/kzm" > "$TEST_ROOT/test-menu.txt"
-grep -q 'Проверить текущую стратегию на полном списке' "$TEST_ROOT/test-menu.txt"
-grep -q 'Найти лучшую стратегию v + Flowseal' "$TEST_ROOT/test-menu.txt"
-grep -q 'Live-тест YouTube на устройстве: TCP-профиль или QUIC' "$TEST_ROOT/test-menu.txt"
+grep -q 'Текущая стратегия: полный список' "$TEST_ROOT/test-menu.txt"
+grep -q 'Найти лучшую v + Flowseal' "$TEST_ROOT/test-menu.txt"
+grep -q 'Live-тест YouTube: TCP-профиль или QUIC' "$TEST_ROOT/test-menu.txt"
 
 cat > "$TEST_ROOT/opt/etc/kzapret-manager/kzm.conf" <<EOF
 GENERAL_URL="file://$PROJECT_DIR/tests/fixtures/Strategies.md"
@@ -445,7 +445,7 @@ grep -q '^YOUTUBE_PROFILE=Yv08$' "$TEST_ROOT/opt/etc/kzapret-manager/state.conf"
 printf '1\n3\n7\n3\n\n\n\n' | KZM_ROOT="$TEST_ROOT" "$TEST_ROOT/opt/bin/kzm" > "$TEST_ROOT/discord-numbered-menu.txt"
 grep -q '^DISCORD_MEDIA_PROFILE=Dv2$' "$TEST_ROOT/opt/etc/kzapret-manager/state.conf"
 grep -q 'Меню настройки Discord' "$TEST_ROOT/discord-numbered-menu.txt"
-grep -q '8) Меню выбора fake для discord,stun' "$TEST_ROOT/discord-numbered-menu.txt"
+grep -q '8) Выбрать fake для discord,stun' "$TEST_ROOT/discord-numbered-menu.txt"
 grep -q '9) Включить базовый обход Discord' "$TEST_ROOT/discord-numbered-menu.txt"
 
 printf '1\n3\n1\n\n\n\n' | KZM_ROOT="$TEST_ROOT" "$TEST_ROOT/opt/bin/kzm" > "$TEST_ROOT/discord-unsupported-menu.txt"
@@ -496,9 +496,10 @@ grep -q -- '--filter-udp=443' "$TEST_ROOT/preview.txt"
 grep -q -- '--dpi-desync-fake-quic=.*/quic_initial_www_google_com.bin' "$TEST_ROOT/preview.txt"
 grep -q -- '--filter-udp=1024-65535' "$TEST_ROOT/preview.txt"
 
+rm -f "$TEST_ROOT/restart.log"
 KZM_ROOT="$TEST_ROOT" "$TEST_ROOT/opt/bin/kzm" apply >/tmp/kzm-test-apply.log
 [ ! -f "$TEST_ROOT/restart.log" ]
-KZM_ROOT="$TEST_ROOT" "$TEST_ROOT/opt/bin/kzm" status | grep -q 'конфиг записан, перезапуск не подтверждён'
+KZM_ROOT="$TEST_ROOT" "$TEST_ROOT/opt/bin/kzm" status | grep -q 'сохранено, нужен перезапуск nfqws'
 grep -q '^NFQWS_ARGS_CUSTOM=".*--filter-tcp=443' "$TEST_ROOT/opt/etc/nfqws/nfqws.conf"
 grep -q '^TCP_PORTS="443,2053,2083,2087,2096,8443"' "$TEST_ROOT/opt/etc/nfqws/nfqws.conf"
 grep -q '^UDP_PORTS="443,19294:19344,50000:50100,1024:65535"' "$TEST_ROOT/opt/etc/nfqws/nfqws.conf"
@@ -622,7 +623,7 @@ fi
 
 touch "$TEST_ROOT/opt/etc/init.d/S51nfqws2"
 printf '5\n\n' | KZM_ROOT="$TEST_ROOT" "$TEST_ROOT/opt/bin/kzm" > "$TEST_ROOT/nfqws2-menu.txt"
-grep -q 'KZM не будет автоматически заменять движок' "$TEST_ROOT/nfqws2-menu.txt"
+grep -q 'Автозамена движка отключена' "$TEST_ROOT/nfqws2-menu.txt"
 
 cat > "$TEST_ROOT/mock-canary.sh" <<'EOF'
 #!/bin/sh
@@ -652,8 +653,8 @@ mkdir -p "$TEST_ROOT/mock-live-libexec"
 cp "$TEST_ROOT/mock-canary.sh" "$TEST_ROOT/mock-live-libexec/router-canary.sh"
 KZM_LIBEXEC="$TEST_ROOT/mock-live-libexec" KZM_ROOT="$TEST_ROOT" \
     "$TEST_ROOT/opt/bin/kzm" test status > "$TEST_ROOT/live-status-hint.txt"
-grep -q 'pkts > 0.*IPv4-трафик' "$TEST_ROOT/live-status-hint.txt"
-grep -q 'Автооткат.*kzm test stop' "$TEST_ROOT/live-status-hint.txt"
+grep -q 'pkts > 0.*тест получил IPv4' "$TEST_ROOT/live-status-hint.txt"
+grep -q 'Откат:.*kzm test stop' "$TEST_ROOT/live-status-hint.txt"
 
 # The YouTube TCP live test passes only one client/TCP profile to the isolated
 # canary, requests the optional exact Mihomo bypass only for detected topology,
@@ -738,5 +739,140 @@ if grep -Eq '^\[( OK |FAIL)\]|^Результат (контроля|теста):
     exit 1
 fi
 [ "$(awk 'END { print NR+0 }' "$TEST_ROOT/suite-result.tsv")" -eq 5 ]
+
+# SSH UI behavior is tested in a separate copy so its automatic saves cannot
+# affect the protocol and canary fixtures above.
+UI_TEST_ROOT=/tmp/kzm-ui-test-root.$$
+case "$UI_TEST_ROOT" in /tmp/kzm-ui-test-root.*) ;; *) exit 1 ;; esac
+rm -rf "$UI_TEST_ROOT"
+cp -a "$TEST_ROOT" "$UI_TEST_ROOT"
+UI_KZM="$UI_TEST_ROOT/opt/bin/kzm"
+UI_ETC="$UI_TEST_ROOT/opt/etc/kzapret-manager"
+UI_INIT="$UI_TEST_ROOT/opt/etc/init.d/S51nfqws"
+rm -f "$UI_TEST_ROOT/opt/etc/init.d/S51nfqws2" "$UI_TEST_ROOT/restart.log"
+KZM_ROOT="$UI_TEST_ROOT" "$UI_KZM" apply --restart --yes >/dev/null
+rm -f "$UI_TEST_ROOT/restart.log"
+
+# Captured/non-interactive output stays plain, while forced terminal colors use
+# cyan for numeric keys, yellow [!] for pending state and green [OK] for success.
+printf '\n' | KZM_ROOT="$UI_TEST_ROOT" "$UI_KZM" zapret > "$UI_TEST_ROOT/ui-plain.txt"
+ui_escape=$(printf '\033')
+if grep -q "$ui_escape" "$UI_TEST_ROOT/ui-plain.txt"; then
+    echo "Non-interactive menu unexpectedly contains ANSI colors" >&2
+    exit 1
+fi
+[ ! -e "$UI_TEST_ROOT/restart.log" ]
+
+ui_game_value=$(awk -F= '$1 == "GAME_ENABLED" { print $2; exit }' "$UI_ETC/state.conf")
+if [ "$ui_game_value" = 1 ]; then ui_game_next=off; else ui_game_next=on; fi
+KZM_ROOT="$UI_TEST_ROOT" "$UI_KZM" strategy set game "$ui_game_next" >/dev/null
+grep -qx 'dirty' "$UI_ETC/pending-changes"
+KZM_ROOT="$UI_TEST_ROOT" "$UI_KZM" status | grep -q 'есть несохранённые изменения'
+printf 's\n' | KZM_COLOR=always KZM_ROOT="$UI_TEST_ROOT" "$UI_KZM" zapret > "$UI_TEST_ROOT/ui-color-save.txt"
+ui_cyan=$(printf '\033[36m')
+ui_yellow=$(printf '\033[33m')
+ui_green=$(printf '\033[32m')
+ui_red=$(printf '\033[31m')
+ui_reset=$(printf '\033[0m')
+grep -Fq "${ui_cyan}1)${ui_reset} Стратегии" "$UI_TEST_ROOT/ui-color-save.txt"
+grep -Fq "${ui_yellow}[!]${ui_reset} изменения не сохранены" "$UI_TEST_ROOT/ui-color-save.txt"
+grep -Fq "${ui_green}[OK]${ui_reset} Настройки сохранены" "$UI_TEST_ROOT/ui-color-save.txt"
+awk -v cyan="$ui_cyan" -v red="$ui_red" -v green="$ui_green" '
+    /^[[:space:]]/ && $0 ~ /[0-9]+\)/ {
+        count++
+        number_end=index($0, ")")
+        prefix=substr($0, 1, number_end)
+        if (index(prefix, cyan) == 0 || index(prefix, red) != 0 || index(prefix, green) != 0) bad=1
+    }
+    END { exit (count >= 7 && !bad) ? 0 : 1 }
+' "$UI_TEST_ROOT/ui-color-save.txt"
+[ ! -e "$UI_ETC/pending-changes" ]
+cmp "$UI_ETC/state.conf" "$UI_ETC/configured-state.conf"
+cmp "$UI_ETC/configured-state.conf" "$UI_ETC/running-state.conf"
+[ "$(awk 'END { print NR+0 }' "$UI_TEST_ROOT/restart.log")" -eq 1 ]
+
+# Exiting with no changes is idempotent and must not restart the router service.
+rm -f "$UI_TEST_ROOT/restart.log"
+printf '\n' | KZM_ROOT="$UI_TEST_ROOT" "$UI_KZM" zapret >/dev/null
+[ ! -e "$UI_TEST_ROOT/restart.log" ]
+
+# S works from a direct submenu and from a numbered picker running in the
+# protected action subshell.
+ui_game_value=$(awk -F= '$1 == "GAME_ENABLED" { print $2; exit }' "$UI_ETC/state.conf")
+if [ "$ui_game_value" = 1 ]; then ui_game_next=off; else ui_game_next=on; fi
+KZM_ROOT="$UI_TEST_ROOT" "$UI_KZM" strategy set game "$ui_game_next" >/dev/null
+printf '1\ns\n' | KZM_ROOT="$UI_TEST_ROOT" "$UI_KZM" zapret > "$UI_TEST_ROOT/ui-nested-save.txt"
+[ ! -e "$UI_ETC/pending-changes" ]
+[ "$(awk 'END { print NR+0 }' "$UI_TEST_ROOT/restart.log")" -eq 1 ]
+
+rm -f "$UI_TEST_ROOT/restart.log"
+KZM_ROOT="$UI_TEST_ROOT" "$UI_KZM" domain add ui-picker.example >/dev/null
+printf '1\n1\ns\n' | KZM_ROOT="$UI_TEST_ROOT" "$UI_KZM" zapret > "$UI_TEST_ROOT/ui-picker-save.txt"
+[ ! -e "$UI_ETC/pending-changes" ]
+[ "$(awk 'END { print NR+0 }' "$UI_TEST_ROOT/restart.log")" -eq 1 ]
+
+# Enter/Back also saves before returning to the main menu, including list-only
+# changes which are not represented by state.conf.
+rm -f "$UI_TEST_ROOT/restart.log"
+KZM_ROOT="$UI_TEST_ROOT" "$UI_KZM" domain add ui-back.example >/dev/null
+printf '2\n\n\n' | KZM_ROOT="$UI_TEST_ROOT" "$UI_KZM" zapret > "$UI_TEST_ROOT/ui-back-save.txt"
+[ ! -e "$UI_ETC/pending-changes" ]
+[ "$(awk 'END { print NR+0 }' "$UI_TEST_ROOT/restart.log")" -eq 1 ]
+
+# A failed restart restores the exact previous config/state, leaves changes
+# pending, and returns control to the menu instead of looping or disconnecting.
+cp "$UI_TEST_ROOT/opt/etc/nfqws/nfqws.conf" "$UI_TEST_ROOT/ui-before-failed-save.conf"
+cp "$UI_ETC/configured-state.conf" "$UI_TEST_ROOT/ui-before-failed-configured.conf"
+cp "$UI_ETC/running-state.conf" "$UI_TEST_ROOT/ui-before-failed-running.conf"
+cp "$UI_INIT" "$UI_TEST_ROOT/ui-init.good"
+cat > "$UI_INIT" <<'EOF'
+#!/bin/sh
+case "$1" in
+    status) echo "Service NFQWS is running" ;;
+    restart)
+        count_file="${KZM_ROOT:?}/ui-failed-restart.count"
+        count=$(cat "$count_file" 2>/dev/null || printf '0')
+        count=$((count + 1))
+        printf '%s\n' "$count" > "$count_file"
+        [ "$count" -gt 1 ]
+        ;;
+    *) exit 1 ;;
+esac
+EOF
+chmod +x "$UI_INIT"
+ui_game_value=$(awk -F= '$1 == "GAME_ENABLED" { print $2; exit }' "$UI_ETC/state.conf")
+if [ "$ui_game_value" = 1 ]; then ui_game_next=off; else ui_game_next=on; fi
+KZM_ROOT="$UI_TEST_ROOT" "$UI_KZM" strategy set game "$ui_game_next" >/dev/null
+printf 's\n' | KZM_COLOR=always KZM_ROOT="$UI_TEST_ROOT" "$UI_KZM" zapret > "$UI_TEST_ROOT/ui-failed-save.txt" 2>&1 || true
+grep -Fq "${ui_red}[X]${ui_reset} Сохранение не выполнено" "$UI_TEST_ROOT/ui-failed-save.txt"
+grep -qx 'dirty' "$UI_ETC/pending-changes"
+grep -qx '2' "$UI_TEST_ROOT/ui-failed-restart.count"
+cmp "$UI_TEST_ROOT/ui-before-failed-save.conf" "$UI_TEST_ROOT/opt/etc/nfqws/nfqws.conf"
+cmp "$UI_TEST_ROOT/ui-before-failed-configured.conf" "$UI_ETC/configured-state.conf"
+cmp "$UI_TEST_ROOT/ui-before-failed-running.conf" "$UI_ETC/running-state.conf"
+mv "$UI_TEST_ROOT/ui-init.good" "$UI_INIT"
+chmod +x "$UI_INIT"
+printf 's\n' | KZM_ROOT="$UI_TEST_ROOT" "$UI_KZM" zapret >/dev/null
+[ ! -e "$UI_ETC/pending-changes" ]
+
+# Repeated navigation remains iterative and never causes an unnecessary restart.
+rm -f "$UI_TEST_ROOT/restart.log"
+: > "$UI_TEST_ROOT/ui-stability.input"
+ui_iteration=0
+while [ "$ui_iteration" -lt 100 ]; do
+    printf '1\n\n' >> "$UI_TEST_ROOT/ui-stability.input"
+    ui_iteration=$((ui_iteration + 1))
+done
+printf '\n' >> "$UI_TEST_ROOT/ui-stability.input"
+KZM_ROOT="$UI_TEST_ROOT" "$UI_KZM" zapret < "$UI_TEST_ROOT/ui-stability.input" > "$UI_TEST_ROOT/ui-stability.txt"
+[ ! -e "$UI_TEST_ROOT/restart.log" ]
+[ "$(grep -c 'Меню стратегий' "$UI_TEST_ROOT/ui-stability.txt")" -eq 100 ]
+
+# The parent component menu follows the same numeric color rule.
+printf '\n' | KZM_COLOR=always KZM_ROOT="$UI_TEST_ROOT" \
+    "$UI_TEST_ROOT/opt/libexec/kzm/component-manager.sh" menu > "$UI_TEST_ROOT/component-color.txt"
+grep -Fq "${ui_cyan}1)${ui_reset} Zapret" "$UI_TEST_ROOT/component-color.txt"
+
+rm -rf "$UI_TEST_ROOT"
 
 echo "All kzm tests passed"

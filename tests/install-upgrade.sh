@@ -163,6 +163,7 @@ etc/kzapret-manager/kzm.conf
 etc/kzapret-manager/state.conf
 etc/kzapret-manager/configured-state.conf
 etc/kzapret-manager/running-state.conf
+etc/kzapret-manager/pending-changes
 etc/kzapret-manager/lists/user.list
 etc/kzapret-manager/lists/user-ipset.list
 etc/kzapret-manager/lists/auto.list

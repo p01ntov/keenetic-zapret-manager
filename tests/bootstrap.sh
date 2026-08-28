@@ -57,12 +57,12 @@ install_root="$TEST_ROOT/install-root"
 mkdir "$install_root"
 KZM_ARCHIVE_URL="file://$TEST_ARCHIVE" \
 KZM_CHECKSUM_URL="file://$TEST_CHECKSUM" \
-KZM_RELEASE_TAG=v0.8.1 \
+KZM_RELEASE_TAG=v0.8.2 \
     sh "$PROJECT_DIR/bootstrap.sh" --root "$install_root" \
     > "$TEST_ROOT/install.out"
 
 [ -x "$install_root/opt/bin/kzm" ] || fail "kzm was not installed"
-[ "$(KZM_ROOT="$install_root" "$install_root/opt/bin/kzm" version)" = 0.8.1 ] || \
+[ "$(KZM_ROOT="$install_root" "$install_root/opt/bin/kzm" version)" = 0.8.2 ] || \
     fail "installed version does not match"
 grep -q 'установлен из проверенного релиза GitHub' "$TEST_ROOT/install.out" || \
     fail "bootstrap success message is missing"
@@ -73,7 +73,7 @@ bad_root="$TEST_ROOT/bad-root"
 mkdir "$bad_root"
 if KZM_ARCHIVE_URL="file://$TEST_ARCHIVE" \
         KZM_CHECKSUM_URL="file://$bad_checksum" \
-        KZM_RELEASE_TAG=v0.8.1 \
+        KZM_RELEASE_TAG=v0.8.2 \
         sh "$PROJECT_DIR/bootstrap.sh" --root "$bad_root" \
         > "$TEST_ROOT/bad-checksum.out" 2>&1; then
     fail "bootstrap accepted an invalid checksum"

@@ -2,7 +2,7 @@
 
 set -u
 
-KZM_VERSION="0.8.1"
+KZM_VERSION="0.8.2"
 KZM_ROOT="${KZM_ROOT:-}"
 KZM_PREFIX="${KZM_PREFIX:-/opt}"
 KZM_BASE="${KZM_ROOT}${KZM_PREFIX}"
@@ -37,6 +37,7 @@ RESULT_DIR="$KZM_ETC/results"
 ACTIVE_STRATEGY="$KZM_ETC/active.strategy"
 CONFIGURED_STATE="$KZM_ETC/configured-state.conf"
 RUNNING_STATE="$KZM_ETC/running-state.conf"
+PENDING_CHANGES="$KZM_ETC/pending-changes"
 LAST_TEST_RESULT="$RESULT_DIR/last-strategy-test.csv"
 LAST_TEST_META="$RESULT_DIR/last-strategy-test.meta"
 USER_LIST="$LIST_DIR/user.list"
@@ -95,17 +96,81 @@ if [ -r "$STATE_FILE" ]; then
     . "$STATE_FILE"
 fi
 
+UI_RESET=
+UI_DIM=
+UI_NUMBER=
+UI_GOOD=
+UI_BAD=
+UI_WARN=
+
+init_ui_colors() {
+    case "${KZM_COLOR:-auto}" in
+        always) ui_color_enabled=1 ;;
+        never) ui_color_enabled=0 ;;
+        auto)
+            if [ -t 1 ] 2>/dev/null && [ -n "${TERM:-}" ] && [ "$TERM" != dumb ] && [ -z "${NO_COLOR:-}" ]; then
+                ui_color_enabled=1
+            else
+                ui_color_enabled=0
+            fi
+            ;;
+        *) ui_color_enabled=0 ;;
+    esac
+    [ "$ui_color_enabled" -eq 1 ] || return 0
+    ui_escape=$(printf '\033')
+    UI_RESET="${ui_escape}[0m"
+    UI_DIM="${ui_escape}[2m"
+    UI_NUMBER="${ui_escape}[36m"
+    UI_GOOD="${ui_escape}[32m"
+    UI_BAD="${ui_escape}[31m"
+    UI_WARN="${ui_escape}[33m"
+}
+
+init_ui_colors
+
 say() {
     printf '%s\n' "$*"
 }
 
 warn() {
-    printf 'Внимание: %s\n' "$*" >&2
+    printf '%s[!]%s %s\n' "$UI_WARN" "$UI_RESET" "$*" >&2
 }
 
 die() {
-    printf 'Ошибка: %s\n' "$*" >&2
+    printf '%s[X]%s %s\n' "$UI_BAD" "$UI_RESET" "$*" >&2
     exit 1
+}
+
+ui_good_line() {
+    printf '%s[OK]%s %s\n' "$UI_GOOD" "$UI_RESET" "$*"
+}
+
+ui_bad_line() {
+    printf '%s[X]%s %s\n' "$UI_BAD" "$UI_RESET" "$*"
+}
+
+ui_warn_line() {
+    printf '%s[!]%s %s\n' "$UI_WARN" "$UI_RESET" "$*"
+}
+
+menu_option() {
+    menu_option_key=$1
+    shift
+    printf '  %s%s)%s %s\n' "$UI_NUMBER" "$menu_option_key" "$UI_RESET" "$*"
+}
+
+menu_back_option() {
+    printf '  %sEnter)%s %s\n' "$UI_DIM" "$UI_RESET" "$*"
+}
+
+menu_save_option() {
+    printf '  %sS)%s Сохранить и выйти\n' "$UI_NUMBER" "$UI_RESET"
+}
+
+menu_footer() {
+    menu_save_option
+    menu_back_option "$1"
+    printf '\n'
 }
 
 cleanup_tmp() {
@@ -163,8 +228,46 @@ ensure_layout() {
     fi
 }
 
+pending_changes_kind() {
+    if [ -s "$PENDING_CHANGES" ]; then
+        pending_kind=$(sed -n '1p' "$PENDING_CHANGES" 2>/dev/null)
+        case "$pending_kind" in
+            dirty|restart) printf '%s\n' "$pending_kind" ;;
+            *) printf 'dirty\n' ;;
+        esac
+    fi
+}
+
+mark_pending_changes() {
+    pending_kind=${1:-dirty}
+    case "$pending_kind" in dirty|restart) ;; *) pending_kind=dirty ;; esac
+    mkdir -p "$KZM_ETC" || die "не удалось создать каталог настроек"
+    pending_next="$PENDING_CHANGES.next.$$"
+    printf '%s\n' "$pending_kind" > "$pending_next" || die "не удалось отметить несохранённые настройки"
+    chmod 600 "$pending_next" 2>/dev/null || true
+    mv "$pending_next" "$PENDING_CHANGES" || die "не удалось отметить несохранённые настройки"
+}
+
+clear_pending_changes() {
+    rm -f "$PENDING_CHANGES"
+}
+
+configuration_has_dirty_changes() {
+    [ "$(pending_changes_kind)" = dirty ] && return 0
+    [ -f "$CONFIGURED_STATE" ] && ! cmp -s "$STATE_FILE" "$CONFIGURED_STATE" 2>/dev/null
+}
+
+configuration_needs_restart() {
+    [ "$(pending_changes_kind)" = restart ] && return 0
+    [ -f "$CONFIGURED_STATE" ] && {
+        [ ! -f "$RUNNING_STATE" ] || ! cmp -s "$CONFIGURED_STATE" "$RUNNING_STATE" 2>/dev/null
+    }
+}
+
 write_state_file() {
     state_tmp="$STATE_FILE.tmp.$$"
+    state_file_existed=0
+    [ -f "$STATE_FILE" ] && state_file_existed=1
     {
         printf 'GENERAL_PROFILE=%s\n' "$GENERAL_PROFILE"
         printf 'YOUTUBE_PROFILE=%s\n' "$YOUTUBE_PROFILE"
@@ -177,7 +280,12 @@ write_state_file() {
         printf 'TRAFFIC_SCOPE=%s\n' "$TRAFFIC_SCOPE"
     } > "$state_tmp" || die "не удалось записать state.conf"
     chmod 600 "$state_tmp" 2>/dev/null || true
+    if [ "$state_file_existed" -eq 1 ] && cmp -s "$state_tmp" "$STATE_FILE" 2>/dev/null; then
+        rm -f "$state_tmp"
+        return 0
+    fi
     mv "$state_tmp" "$STATE_FILE" || die "не удалось применить state.conf"
+    [ "$state_file_existed" -eq 0 ] || mark_pending_changes dirty
 }
 
 validate_state() {
@@ -484,6 +592,7 @@ catalog_update() {
     update_exclude_list "$KZM_TMP/exclude.list" || true
     update_test_targets "$KZM_TMP/suite.v2.json" || true
     date -u '+%Y-%m-%dT%H:%M:%SZ' > "$CATALOG_DIR/updated_at"
+    mark_pending_changes dirty
 
     say "Импортировано: v=$general_count, Flowseal=$flowseal_count, YouTube=$youtube_count, Discord media=$discord_count; источники Discord 50-* проверены."
     assets_update
@@ -897,8 +1006,14 @@ apply_config() {
     say "Конфиг записан. Резервная копия: $backup_path"
     if [ "$do_restart" -eq 1 ]; then
         if restart_service; then
-            cp "$CONFIGURED_STATE" "$RUNNING_STATE.next.$$" && mv "$RUNNING_STATE.next.$$" "$RUNNING_STATE"
-            say "Классический nfqws перезапущен."
+            if cp "$CONFIGURED_STATE" "$RUNNING_STATE.next.$$" && mv "$RUNNING_STATE.next.$$" "$RUNNING_STATE"; then
+                clear_pending_changes
+                ui_good_line "Настройки сохранены, классический nfqws перезапущен."
+            else
+                rm -f "$RUNNING_STATE.next.$$"
+                mark_pending_changes restart
+                die "nfqws перезапущен, но не удалось сохранить его состояние"
+            fi
         else
             warn "перезапуск не удался; возвращаю предыдущий конфиг"
             cp "$backup_path" "$NFQWS_CONFIG"
@@ -916,7 +1031,8 @@ apply_config() {
             die "новая конфигурация отменена"
         fi
     else
-        say "Служба НЕ перезапускалась. Для применения: kzm service restart --yes"
+        mark_pending_changes restart
+        ui_warn_line "Конфиг сохранён, но nfqws ещё не перезапущен."
     fi
 }
 
@@ -939,7 +1055,7 @@ select_general() {
     [ -f "$selected_path" ] || die "стратегия $selected не найдена"
     GENERAL_PROFILE=$selected
     write_state_file
-    say "Выбрана основная стратегия $selected. Конфиг ещё не менялся."
+    ui_warn_line "Выбрана основная стратегия $selected. Настройки не сохранены."
 }
 
 select_youtube() {
@@ -950,7 +1066,7 @@ select_youtube() {
     fi
     YOUTUBE_PROFILE=$selected
     write_state_file
-    say "YouTube-стратегия: $selected. Конфиг ещё не менялся."
+    ui_warn_line "YouTube: $selected. Настройки не сохранены."
 }
 
 select_toggle() {
@@ -964,7 +1080,7 @@ select_toggle() {
         *) die "неизвестный переключатель $toggle_name" ;;
     esac
     write_state_file
-    say "$toggle_name: $toggle_value. Конфиг ещё не менялся."
+    ui_warn_line "$toggle_name: $toggle_value. Настройки не сохранены."
 }
 
 select_discord_media() {
@@ -975,7 +1091,7 @@ select_discord_media() {
     fi
     DISCORD_MEDIA_PROFILE=$selected
     write_state_file
-    say "Discord media: $selected. Конфиг ещё не менялся."
+    ui_warn_line "Discord media: $selected. Настройки не сохранены."
 }
 
 select_discord_script() {
@@ -994,7 +1110,7 @@ select_discord_script() {
         DISCORD_ENABLED=1
     fi
     write_state_file
-    say "Дополнительный режим Discord: $selected. OpenWrt-скрипт и вторая служба не устанавливались; конфиг ещё не менялся."
+    ui_warn_line "Режим Discord: $selected. Настройки не сохранены."
 }
 
 select_discord_fake() {
@@ -1020,9 +1136,9 @@ select_discord_fake() {
     DISCORD_FAKE=$selected
     write_state_file
     if [ "$selected" = off ]; then
-        say "Переопределение fake для discord,stun удалено; nfqws использует встроенные payload. Конфиг ещё не менялся."
+        ui_warn_line "Discord fake: встроенный payload. Настройки не сохранены."
     else
-        say "fake для discord,stun: $selected. Конфиг ещё не менялся."
+        ui_warn_line "Discord fake: $selected. Настройки не сохранены."
     fi
 }
 
@@ -1034,7 +1150,7 @@ select_scope() {
     fi
     TRAFFIC_SCOPE=$selected
     write_state_file
-    say "Режим трафика: $selected. Конфиг ещё не менялся."
+    ui_warn_line "Режим трафика: $selected. Настройки не сохранены."
 }
 
 list_strategies() {
@@ -1095,6 +1211,9 @@ import_custom() {
     ' "$custom_source" > "$KZM_TMP/custom.strategy"
     validate_strategy "$KZM_TMP/custom.strategy" || die "custom-стратегия не прошла безопасную проверку"
     cp "$KZM_TMP/custom.strategy" "$CUSTOM_DIR/$custom_name.strategy"
+    if [ "$GENERAL_PROFILE" = "custom:$custom_name" ]; then
+        mark_pending_changes dirty
+    fi
     say "Импортировано как custom:$custom_name"
 }
 
@@ -1133,7 +1252,12 @@ domain_add() {
     done
     domain_next="$USER_LIST.next.$$"
     awk 'NF && !seen[$0]++ { print }' "$USER_LIST" "$domain_candidates" > "$domain_next" || die "не удалось обновить список доменов"
-    mv "$domain_next" "$USER_LIST" || die "не удалось применить список доменов"
+    if cmp -s "$domain_next" "$USER_LIST" 2>/dev/null; then
+        rm -f "$domain_next"
+    else
+        mv "$domain_next" "$USER_LIST" || die "не удалось применить список доменов"
+        mark_pending_changes dirty
+    fi
     while IFS= read -r clean_domain; do
         say "Добавлен: $clean_domain"
     done < "$domain_candidates"
@@ -1153,7 +1277,12 @@ domain_remove() {
     done
     list_tmp="$USER_LIST.tmp.$$"
     awk 'NR==FNR { remove[$0]=1; next } !($0 in remove) { print }' "$domain_candidates" "$USER_LIST" > "$list_tmp" || die "не удалось обновить список доменов"
-    mv "$list_tmp" "$USER_LIST" || die "не удалось применить список доменов"
+    if cmp -s "$list_tmp" "$USER_LIST" 2>/dev/null; then
+        rm -f "$list_tmp"
+    else
+        mv "$list_tmp" "$USER_LIST" || die "не удалось применить список доменов"
+        mark_pending_changes dirty
+    fi
     while IFS= read -r clean_domain; do
         say "Удалён: $clean_domain"
     done < "$domain_candidates"
@@ -1223,7 +1352,12 @@ network_add() {
     done
     network_next="$USER_IPSET.next.$$"
     awk 'NF && !seen[$0]++ { print }' "$USER_IPSET" "$network_candidates" > "$network_next" || die "не удалось обновить список сетей"
-    mv "$network_next" "$USER_IPSET" || die "не удалось применить список сетей"
+    if cmp -s "$network_next" "$USER_IPSET" 2>/dev/null; then
+        rm -f "$network_next"
+    else
+        mv "$network_next" "$USER_IPSET" || die "не удалось применить список сетей"
+        mark_pending_changes dirty
+    fi
     while IFS= read -r clean_network; do
         say "Добавлено: $clean_network"
     done < "$network_candidates"
@@ -1243,7 +1377,12 @@ network_remove() {
     done
     list_tmp="$USER_IPSET.tmp.$$"
     awk 'NR==FNR { remove[$0]=1; next } !($0 in remove) { print }' "$network_candidates" "$USER_IPSET" > "$list_tmp" || die "не удалось обновить список сетей"
-    mv "$list_tmp" "$USER_IPSET" || die "не удалось применить список сетей"
+    if cmp -s "$list_tmp" "$USER_IPSET" 2>/dev/null; then
+        rm -f "$list_tmp"
+    else
+        mv "$list_tmp" "$USER_IPSET" || die "не удалось применить список сетей"
+        mark_pending_changes dirty
+    fi
     while IFS= read -r clean_network; do
         say "Удалено: $clean_network"
     done < "$network_candidates"
@@ -1331,6 +1470,18 @@ engine_status_ru() {
     fi
 }
 
+engine_status_ui() {
+    engine_ui_text=$(engine_status_ru)
+    if [ -e "$NFQWS2_INIT" ]; then
+        printf '%s[X]%s %s' "$UI_BAD" "$UI_RESET" "$engine_ui_text"
+    elif [ -x "$NFQWS_INIT" ] && [ -x "$NFQWS_BIN" ] && [ -f "$NFQWS_CONFIG" ] && \
+            "$NFQWS_INIT" status >/dev/null 2>&1; then
+        printf '%s[OK]%s %s' "$UI_GOOD" "$UI_RESET" "$engine_ui_text"
+    else
+        printf '%s[X]%s %s' "$UI_BAD" "$UI_RESET" "$engine_ui_text"
+    fi
+}
+
 catalog_status_ru() {
     if [ -s "$CATALOG_DIR/updated_at" ]; then
         printf '%s' "$(cat "$CATALOG_DIR/updated_at")"
@@ -1339,17 +1490,44 @@ catalog_status_ru() {
     fi
 }
 
+catalog_status_ui() {
+    catalog_ui_text=$(catalog_status_ru)
+    if [ -s "$CATALOG_DIR/updated_at" ]; then
+        printf '%s[OK]%s %s' "$UI_GOOD" "$UI_RESET" "$catalog_ui_text"
+    else
+        printf '%s[!]%s %s' "$UI_WARN" "$UI_RESET" "$catalog_ui_text"
+    fi
+}
+
 configuration_status_ru() {
     if [ -e "$NFQWS2_INIT" ]; then
         printf 'не применяется: установлен nfqws2'
+    elif configuration_has_dirty_changes; then
+        printf 'есть несохранённые изменения'
+    elif configuration_needs_restart; then
+        printf 'сохранено, нужен перезапуск nfqws'
     elif [ ! -f "$CONFIGURED_STATE" ]; then
         printf 'ещё не записывалась через KZM'
-    elif ! cmp -s "$STATE_FILE" "$CONFIGURED_STATE" 2>/dev/null; then
-        printf 'есть неприменённые изменения'
     elif [ -f "$RUNNING_STATE" ] && cmp -s "$CONFIGURED_STATE" "$RUNNING_STATE" 2>/dev/null; then
         printf 'применена'
     else
         printf 'конфиг записан, перезапуск не подтверждён'
+    fi
+}
+
+configuration_status_ui() {
+    if [ -e "$NFQWS2_INIT" ]; then
+        printf '%s[X]%s установлен nfqws2' "$UI_BAD" "$UI_RESET"
+    elif configuration_has_dirty_changes; then
+        printf '%s[!]%s изменения не сохранены' "$UI_WARN" "$UI_RESET"
+    elif configuration_needs_restart; then
+        printf '%s[!]%s нужен перезапуск nfqws' "$UI_WARN" "$UI_RESET"
+    elif [ ! -f "$CONFIGURED_STATE" ]; then
+        printf '%s[!]%s ещё не применялись через KZM' "$UI_WARN" "$UI_RESET"
+    elif [ -f "$RUNNING_STATE" ] && cmp -s "$CONFIGURED_STATE" "$RUNNING_STATE" 2>/dev/null; then
+        printf '%s[OK]%s применены' "$UI_GOOD" "$UI_RESET"
+    else
+        printf '%s[!]%s перезапуск не подтверждён' "$UI_WARN" "$UI_RESET"
     fi
 }
 
@@ -1376,6 +1554,55 @@ reload_menu_state() {
     fi
 }
 
+MENU_FLOW=
+
+menu_leave_requested() {
+    [ "$MENU_FLOW" = save_exit ]
+}
+
+menu_pending_notice() {
+    if configuration_has_dirty_changes; then
+        ui_warn_line "Настройки не сохранены. Назад - сохранить; S - сохранить и выйти."
+        printf '\n'
+    elif configuration_needs_restart; then
+        ui_warn_line "Настройки сохранены, но nfqws нужно перезапустить."
+        printf '\n'
+    fi
+}
+
+save_pending_configuration() {
+    if configuration_has_dirty_changes; then
+        ui_warn_line "Сохраняю настройки и безопасно перезапускаю nfqws..."
+        if ( apply_config --restart --yes ); then
+            reload_menu_state
+            return 0
+        fi
+    elif configuration_needs_restart; then
+        ui_warn_line "Перезапускаю nfqws для сохранённой конфигурации..."
+        if ( service_command restart --yes ); then
+            reload_menu_state
+            return 0
+        fi
+    else
+        return 0
+    fi
+    reload_menu_state
+    ui_bad_line "Сохранение не выполнено. Изменения оставлены для повторной попытки."
+    return 1
+}
+
+menu_back_to_main() {
+    save_pending_configuration
+}
+
+menu_save_and_exit() {
+    if save_pending_configuration; then
+        MENU_FLOW=save_exit
+        return 0
+    fi
+    return 1
+}
+
 menu_clear() {
     if [ -t 1 ] 2>/dev/null && [ -n "${TERM:-}" ] && [ "$TERM" != dumb ] && command -v clear >/dev/null 2>&1; then
         clear
@@ -1393,8 +1620,14 @@ menu_execute() {
     ( "$@" )
     menu_action_rc=$?
     reload_menu_state
+    if [ "$menu_action_rc" -eq 20 ]; then
+        if ! menu_save_and_exit; then
+            menu_pause
+        fi
+        return 0
+    fi
     if [ "$menu_action_rc" -ne 0 ]; then
-        say "Действие не выполнено. Рабочая конфигурация не менялась."
+        ui_bad_line "Действие не выполнено. Рабочая конфигурация не менялась."
     fi
     menu_pause
     return 0
@@ -1404,8 +1637,8 @@ menu_confirm() {
     confirm_prompt=$1
     while :; do
         printf '%s\n' "$confirm_prompt"
-        printf '  1) Да\n'
-        printf '  2) Нет\n'
+        menu_option 1 "Да"
+        menu_option 2 "Нет"
         printf 'Выберите пункт [2]: '
         IFS= read -r confirm_answer || confirm_answer=
         case "$confirm_answer" in
@@ -1418,11 +1651,11 @@ menu_confirm() {
 
 menu_show_numbered() {
     numbered_file=$1
-    awk -F'|' '
+    awk -F'|' -v number_color="$UI_NUMBER" -v reset_color="$UI_RESET" '
         NF >= 2 {
             label=$0
             sub(/^[^|]*\|/, "", label)
-            printf "  %d) %s\n", NR, label
+            printf "  %s%d)%s %s\n", number_color, NR, reset_color, label
         }
     ' "$numbered_file"
 }
@@ -1437,10 +1670,13 @@ menu_choose_numbered() {
     fi
     while :; do
         menu_show_numbered "$numbered_file"
-        printf '  Enter) Назад\n\n'
+        menu_save_option
+        menu_back_option "Назад"
+        printf '\n'
         printf '%s: ' "$numbered_prompt"
         IFS= read -r numbered_choice || numbered_choice=
         case "$numbered_choice" in
+            s|S) return 20 ;;
             0|'') return 1 ;;
             *[!0-9]*) say "Введите номер из списка."; continue ;;
         esac
@@ -1594,9 +1830,16 @@ service_command() {
             [ "${2:-}" = "--yes" ] || die "перезапуск может оборвать соединение; добавьте --yes"
             if restart_service; then
                 if [ -f "$CONFIGURED_STATE" ]; then
-                    cp "$CONFIGURED_STATE" "$RUNNING_STATE.next.$$" && mv "$RUNNING_STATE.next.$$" "$RUNNING_STATE"
+                    if ! cp "$CONFIGURED_STATE" "$RUNNING_STATE.next.$$" || \
+                            ! mv "$RUNNING_STATE.next.$$" "$RUNNING_STATE"; then
+                        rm -f "$RUNNING_STATE.next.$$"
+                        die "nfqws перезапущен, но не удалось сохранить его состояние"
+                    fi
                 fi
-                say "Классический nfqws перезапущен."
+                if [ "$(pending_changes_kind)" = restart ]; then
+                    clear_pending_changes
+                fi
+                ui_good_line "Классический nfqws перезапущен."
             else
                 die "не удалось перезапустить классический nfqws"
             fi
@@ -1967,7 +2210,7 @@ canary_youtube_live_start() {
     fi
 
     say "Тест: IPv4 $test_client_ip, профиль $test_youtube_profile, TCP/443, ${test_ttl} с."
-    say "Основной nfqws и конфиг не меняются; тест идёт без apply/restart, откат — автоматически по TTL."
+    say "Основной nfqws не меняется: без apply/restart, автооткат по TTL."
     CANARY_MIHOMO_BYPASS="$test_mihomo_bypass" \
     NFQWS_BIN="$KZM_CANARY_BIN" \
     STRATEGY_FILE="$test_strategy" \
@@ -1987,8 +2230,8 @@ canary_status() {
     canary_status_rc=0
     "$KZM_LIBEXEC/router-canary.sh" status || canary_status_rc=$?
     if [ "$canary_status_rc" -eq 0 ]; then
-        say "Как читать: pkts > 0 — IPv4-трафик дошёл до canary, но это ещё не доказывает совпадение домена или успешный обход; pkts = 0 — проверьте IP устройства, IPv6, VPN/мобильную сеть и Mihomo."
-        say "Автооткат — по TTL; немедленный — kzm test stop."
+        say "Пакеты: pkts > 0 - тест получил IPv4; pkts = 0 - проверьте IP, IPv6, VPN и Mihomo."
+        say "Откат: автоматически по TTL или сразу командой kzm test stop."
     fi
     return "$canary_status_rc"
 }
@@ -2169,7 +2412,7 @@ show_suite_strategy_test_results() {
             }
             print ""
             print "Стратегии по числу доступных целей, от меньшего к большему:"
-            print "  плюс — открыла недоступное в контроле, минус — сломала доступное"
+            print "  плюс - открыла недоступное, минус - сломала доступное"
             for (i=1; i<count; i++) {
                 for (j=i+1; j<=count; j++) {
                     left=order[i]
@@ -2459,7 +2702,10 @@ start_youtube_tcp_test_interactive() {
     make_tmp
     build_youtube_live_test_index "$KZM_TMP/youtube-live-menu.tsv"
     say "Выберите TCP-профиль только для временного теста; сохранённый выбор YouTube не изменится."
-    if ! menu_choose_numbered "$KZM_TMP/youtube-live-menu.tsv" "Профиль для live-теста"; then
+    menu_choose_numbered "$KZM_TMP/youtube-live-menu.tsv" "Профиль для live-теста"
+    youtube_live_menu_rc=$?
+    [ "$youtube_live_menu_rc" -ne 20 ] || return 20
+    if [ "$youtube_live_menu_rc" -ne 0 ]; then
         say "Live-тест отменён."
         return 0
     fi
@@ -2474,33 +2720,34 @@ youtube_live_test_menu() {
         menu_clear
         printf 'Live-тест YouTube на одном устройстве\n\n'
         printf '  Временный тест: %s\n\n' "$(live_test_status_ru)"
-        printf '  1) Проверить TCP-профиль YvNN (выбор профиля по номеру, 120 с)\n'
-        printf '  2) Проверить QUIC YouTube (UDP/443, 120 с)\n'
-        printf '  Enter) Назад в меню тестирования\n\n'
+        menu_pending_notice
+        menu_option 1 "Проверить TCP-профиль YvNN (120 с)"
+        menu_option 2 "Проверить QUIC YouTube (UDP/443, 120 с)"
+        menu_footer "Назад в меню тестирования"
         printf 'Выберите пункт: '
         IFS= read -r youtube_live_choice || return
         case "$youtube_live_choice" in
             1) menu_execute start_youtube_tcp_test_interactive ;;
             2) menu_execute start_live_test_interactive quic ;;
-            0|'') return ;;
+            s|S) if menu_save_and_exit; then return; else menu_pause; fi ;;
+            0|'') if menu_back_to_main; then return; else menu_pause; fi ;;
             *) say "Введите номер из списка."; menu_pause ;;
         esac
+        menu_leave_requested && return
     done
 }
 
 apply_interactive() {
     if [ -e "$NFQWS2_INIT" ]; then
-        say "Сейчас установлен nfqws2-keenetic, а выбранные профили имеют формат zapret1."
-        say "KZM не будет автоматически заменять движок: конфиг и интернет не изменены."
-        say "Для перехода сначала нужен отдельный безопасный сценарий из MIGRATION.md."
+        ui_bad_line "Установлен nfqws2, а выбранные профили имеют формат zapret1."
+        say "Автозамена движка отключена. Используйте безопасный сценарий из MIGRATION.md."
         return 1
     fi
     if [ ! -x "$NFQWS_INIT" ] || [ ! -x "$NFQWS_BIN" ] || [ ! -f "$NFQWS_CONFIG" ]; then
         say "Классический nfqws-keenetic установлен не полностью. Ничего не изменено."
         return 1
     fi
-    say "Будут записаны выбранные настройки, создана резервная копия и перезапущен только nfqws."
-    say "SSH может кратко прерваться; при ошибке запуска конфиг будет автоматически возвращён."
+    say "KZM создаст копию и перезапустит только nfqws. При ошибке сработает откат."
     if ! menu_confirm "Применить настройки сейчас?"; then
         say "Применение отменено."
         return 0
@@ -2509,8 +2756,7 @@ apply_interactive() {
 }
 
 update_interactive() {
-    say "Обновляются только каталог стратегий, списки и fake-файлы."
-    say "Активный конфиг и службы не меняются."
+    say "Обновятся стратегии, списки и fake-файлы. Активный nfqws изменится только после сохранения."
     catalog_update
 }
 
@@ -2544,6 +2790,7 @@ restore_command() {
     chmod 600 "$NFQWS_CONFIG.kzm-restore" 2>/dev/null || true
     mv "$NFQWS_CONFIG.kzm-restore" "$NFQWS_CONFIG"
     rm -f "$ACTIVE_STRATEGY" "$CONFIGURED_STATE" "$RUNNING_STATE"
+    clear_pending_changes
     say "Конфиг восстановлен без перезапуска. Предыдущее состояние: $current_backup"
 }
 
@@ -2628,7 +2875,10 @@ choose_general_interactive() {
     make_tmp
     say "Текущая стратегия: $(general_profile_label)"
     build_general_menu_index "$KZM_TMP/general-menu.tsv"
-    if ! menu_choose_numbered "$KZM_TMP/general-menu.tsv" "Выберите стратегию"; then
+    menu_choose_numbered "$KZM_TMP/general-menu.tsv" "Выберите стратегию"
+    general_menu_rc=$?
+    [ "$general_menu_rc" -ne 20 ] || return 20
+    if [ "$general_menu_rc" -ne 0 ]; then
         say "Стратегия не изменена."
         return 0
     fi
@@ -2640,7 +2890,10 @@ choose_youtube_interactive() {
     make_tmp
     say "Текущий профиль YouTube: $YOUTUBE_PROFILE"
     build_youtube_menu_index "$KZM_TMP/youtube-menu.tsv"
-    if ! menu_choose_numbered "$KZM_TMP/youtube-menu.tsv" "Выберите профиль YouTube"; then
+    menu_choose_numbered "$KZM_TMP/youtube-menu.tsv" "Выберите профиль YouTube"
+    youtube_menu_rc=$?
+    [ "$youtube_menu_rc" -ne 20 ] || return 20
+    if [ "$youtube_menu_rc" -ne 0 ]; then
         say "Профиль YouTube не изменён."
         return 0
     fi
@@ -2652,7 +2905,10 @@ choose_discord_media_interactive() {
     make_tmp
     say "Текущий профиль discord.media: $DISCORD_MEDIA_PROFILE"
     build_discord_menu_index "$KZM_TMP/discord-menu.tsv"
-    if ! menu_choose_numbered "$KZM_TMP/discord-menu.tsv" "Выберите профиль Discord media"; then
+    menu_choose_numbered "$KZM_TMP/discord-menu.tsv" "Выберите профиль Discord media"
+    discord_menu_rc=$?
+    [ "$discord_menu_rc" -ne 20 ] || return 20
+    if [ "$discord_menu_rc" -ne 0 ]; then
         say "Профиль Discord media не изменён."
         return 0
     fi
@@ -2663,21 +2919,23 @@ choose_discord_fake_interactive() {
     ensure_layout
     while :; do
         say "Текущий fake для discord,stun: $(discord_fake_status_ru)"
-        say "  1) stun.bin [bol-van, стандартный]"
-        say "  2) stun2.bin [Flowseal]"
-        say "  3) quic_initial_4pda_to.bin [Flowseal]"
-        say "  4) quic_initial_tencent_com.bin [Flowseal]"
-        say "  5) tls_clienthello_sochi_park.bin [Flowseal]"
-        say "  6) quic_initial_www_google_com.bin [bol-van]"
-        say "  7) quic_initial_steamcommunity_com.bin [Flowseal]"
-        say "  8) quic_initial_5ka_ru.bin [Flowseal]"
-        say "  9) quic_initial_rutube_ru.bin [Flowseal]"
-        say "  0) Встроенный payload nfqws (удалить переопределение)"
-        say "  Enter) Назад"
+        menu_pending_notice
+        menu_option 1 "stun.bin [bol-van, стандартный]"
+        menu_option 2 "stun2.bin [Flowseal]"
+        menu_option 3 "quic_initial_4pda_to.bin [Flowseal]"
+        menu_option 4 "quic_initial_tencent_com.bin [Flowseal]"
+        menu_option 5 "tls_clienthello_sochi_park.bin [Flowseal]"
+        menu_option 6 "quic_initial_www_google_com.bin [bol-van]"
+        menu_option 7 "quic_initial_steamcommunity_com.bin [Flowseal]"
+        menu_option 8 "quic_initial_5ka_ru.bin [Flowseal]"
+        menu_option 9 "quic_initial_rutube_ru.bin [Flowseal]"
+        menu_option 0 "Встроенный payload nfqws"
+        menu_footer "Назад"
         printf '\nВыберите fake: '
         IFS= read -r discord_fake_choice || discord_fake_choice=
         case "$discord_fake_choice" in
             '') say "fake не изменён."; return 0 ;;
+            s|S) return 20 ;;
             0) selected_fake=off ;;
             1) selected_fake=stun.bin ;;
             2) selected_fake=stun2.bin ;;
@@ -2700,8 +2958,7 @@ select_discord_script_interactive() {
     case "$selected" in
         50-stun4all)
             say "50-stun4all требует firewall-проверки STUN-сигнатуры на любом UDP-порту."
-            say "Стандартная очередь Keenetic умеет отбирать здесь только порты; безопасный эквивалент без второй службы отсутствует."
-            say "Режим не выбран, конфиг и службы не изменены."
+            say "Для 50-stun4all безопасный эквивалент без второй службы отсутствует. Режим не выбран."
             return 0
             ;;
         50-quic4all)
@@ -2728,8 +2985,7 @@ select_discord_script_interactive() {
 
 show_finland_hosts_unsupported() {
     say "Пункт Zapret Manager создаёт 200 записей finland10000..10199.discord.media."
-    say "На Keenetic native ip host допускает не более 64 записей, используется ndnproxy, а не OpenWrt dnsmasq."
-    say "Поэтому KZM намеренно не меняет /etc/hosts, DNS и службы. Действие не выполнено."
+    say "Лимит Keenetic - 64 записи, поэтому KZM не меняет hosts, DNS и службы."
 }
 
 enable_discord_interactive() {
@@ -2747,7 +3003,7 @@ toggle_discord_interactive() {
             DISCORD_SCRIPT=off
         fi
         write_state_file
-        say "Базовый обход Discord выключен. Конфиг и служба ещё не менялись."
+        ui_warn_line "Базовый обход Discord выключен. Настройки не сохранены."
     else
         enable_discord_interactive
     fi
@@ -2781,20 +3037,21 @@ discord_menu() {
         printf '  Установлен скрипт: %s\n' "$(discord_script_status_ru)"
         printf '  fake в discord,stun: %s\n' "$(discord_fake_status_ru)"
         printf '  Стратегия для discord.media: %s\n\n' "$DISCORD_MEDIA_PROFILE"
-        printf '  1) Установить скрипт 50-stun4all\n'
-        printf '  2) Установить скрипт 50-quic4all\n'
-        printf '  3) Установить скрипт 50-discord-media\n'
-        printf '  4) Установить скрипт 50-discord\n'
-        printf '  5) Удалить скрипт\n'
-        printf '  6) Добавить Финские IP в hosts [недоступно на Keenetic]\n'
-        printf '  7) Выбрать и установить стратегию для discord.media\n'
-        printf '  8) Меню выбора fake для discord,stun\n'
+        menu_pending_notice
+        menu_option 1 "Скрипт 50-stun4all [недоступен безопасно]"
+        menu_option 2 "Скрипт 50-quic4all [недоступен безопасно]"
+        menu_option 3 "Установить режим 50-discord-media"
+        menu_option 4 "Скрипт 50-discord [устарел]"
+        menu_option 5 "Удалить дополнительный режим"
+        menu_option 6 "Финские IP в hosts [недоступно на Keenetic]"
+        menu_option 7 "Выбрать стратегию discord.media"
+        menu_option 8 "Выбрать fake для discord,stun"
         if [ "$DISCORD_ENABLED" -eq 1 ]; then
-            printf '  9) Выключить базовый обход Discord\n'
+            menu_option 9 "Выключить базовый обход Discord"
         else
-            printf '  9) Включить базовый обход Discord\n'
+            menu_option 9 "Включить базовый обход Discord"
         fi
-        printf '  Enter) Выход\n\n'
+        menu_footer "Назад в меню стратегий"
         printf 'Выберите пункт: '
         IFS= read -r discord_choice || return
         case "$discord_choice" in
@@ -2807,9 +3064,11 @@ discord_menu() {
             7) menu_execute choose_discord_media_interactive ;;
             8) menu_execute choose_discord_fake_interactive ;;
             9) menu_execute toggle_discord_interactive ;;
-            0|'') return ;;
+            s|S) if menu_save_and_exit; then return; else menu_pause; fi ;;
+            0|'') if menu_back_to_main; then return; else menu_pause; fi ;;
             *) say "Неизвестный пункт."; menu_pause ;;
         esac
+        menu_leave_requested && return
     done
 }
 
@@ -2818,19 +3077,22 @@ scope_menu() {
         menu_clear
         printf 'Область действия основной стратегии\n\n'
         printf '  Сейчас: %s\n\n' "$(scope_ru)"
-        printf '  1) Только мои домены и IP/подсети\n'
-        printf '  2) Мои цели + автообнаружение доменов\n'
-        printf '  3) Весь веб-трафик, кроме исключений\n'
-        printf '  Enter) Назад в меню стратегий\n\n'
+        menu_pending_notice
+        menu_option 1 "Только мои домены и IP/подсети"
+        menu_option 2 "Мои цели + автообнаружение доменов"
+        menu_option 3 "Весь веб-трафик, кроме исключений"
+        menu_footer "Назад"
         printf 'Выберите пункт: '
         IFS= read -r scope_choice || return
         case "$scope_choice" in
             1) menu_execute select_scope list ;;
             2) menu_execute select_scope auto ;;
             3) menu_execute select_scope all ;;
-            0|'') return ;;
+            s|S) if menu_save_and_exit; then return; else menu_pause; fi ;;
+            0|'') if menu_back_to_main; then return; else menu_pause; fi ;;
             *) say "Неизвестный пункт."; menu_pause ;;
         esac
+        menu_leave_requested && return
     done
 }
 
@@ -2843,21 +3105,22 @@ strategies_menu() {
         printf '  Discord:     %s\n' "$(discord_status_ru)"
         printf '  Игровой UDP: %s\n' "$(enabled_ru "$GAME_ENABLED")"
         printf '  Охват:       %s\n\n' "$(scope_ru)"
-        printf '  1) Выбрать основную стратегию для сайтов\n'
-        printf '  2) Выбрать или отключить стратегию YouTube\n'
-        printf '  3) Настроить Discord\n'
+        menu_pending_notice
+        menu_option 1 "Основная стратегия для сайтов"
+        menu_option 2 "Стратегия YouTube"
+        menu_option 3 "Настроить Discord"
         if [ "$QUIC_ENABLED" -eq 1 ]; then
-            printf '  4) Выключить обход YouTube QUIC (UDP/443)\n'
+            menu_option 4 "Выключить обход YouTube QUIC (UDP/443)"
         else
-            printf '  4) Включить обход YouTube QUIC (UDP/443)\n'
+            menu_option 4 "Включить обход YouTube QUIC (UDP/443)"
         fi
         if [ "$GAME_ENABLED" -eq 1 ]; then
-            printf '  5) Выключить игровой UDP\n'
+            menu_option 5 "Выключить игровой UDP"
         else
-            printf '  5) Включить игровой UDP\n'
+            menu_option 5 "Включить игровой UDP"
         fi
-        printf '  6) Выбрать область действия\n'
-        printf '  Enter) Назад в главное меню\n\n'
+        menu_option 6 "Область действия"
+        menu_footer "Назад в главное меню"
         printf 'Выберите пункт: '
         IFS= read -r strategy_choice || return
         case "$strategy_choice" in
@@ -2867,9 +3130,11 @@ strategies_menu() {
             4) menu_execute toggle_quic_interactive ;;
             5) menu_execute toggle_game_interactive ;;
             6) scope_menu ;;
-            0|'') return ;;
+            s|S) if menu_save_and_exit; then return; else menu_pause; fi ;;
+            0|'') if menu_back_to_main; then return; else menu_pause; fi ;;
             *) say "Неизвестный пункт."; menu_pause ;;
         esac
+        menu_leave_requested && return
     done
 }
 
@@ -2902,21 +3167,23 @@ canary_menu() {
             printf '  Результаты:      ещё нет\n'
         fi
         test_target_count=$(awk 'END { print NR+0 }' "$TEST_TARGETS" 2>/dev/null)
-        printf '\n  1) Проверить текущую стратегию на полном списке (%s адресов)\n' "${test_target_count:-0}"
-        printf '  2) Найти лучшую стратегию v + Flowseal (долгий тест)\n'
-        printf '  3) Подобрать стратегию для своих доменов\n'
-        printf '  4) Проверить голос и медиа Discord на одном устройстве\n'
-        printf '  5) Live-тест YouTube на устройстве: TCP-профиль или QUIC\n'
-        printf '  6) Показать состояние временного теста\n'
-        printf '  7) Обновить отдельный тестовый модуль\n'
+        printf '\n'
+        menu_pending_notice
+        menu_option 1 "Текущая стратегия: полный список (${test_target_count:-0} адресов)"
+        menu_option 2 "Найти лучшую v + Flowseal [долгий тест]"
+        menu_option 3 "Подобрать стратегию для своих доменов"
+        menu_option 4 "Голос и медиа Discord на одном устройстве"
+        menu_option 5 "Live-тест YouTube: TCP-профиль или QUIC"
+        menu_option 6 "Состояние временного теста"
+        menu_option 7 "Обновить тестовый модуль"
         if [ -s "$LAST_TEST_RESULT" ]; then
-            printf '  8) Показать последние результаты\n'
-            printf '  9) Удалить результаты тестов\n'
+            menu_option 8 "Показать последние результаты"
+            menu_option 9 "Удалить результаты тестов"
         fi
         if [ -s /tmp/kzm-router-canary.state ]; then
-            printf '  10) Немедленно остановить временный тест\n'
+            menu_option 10 "Немедленно остановить временный тест"
         fi
-        printf '  Enter) Назад в главное меню\n\n'
+        menu_footer "Назад в главное меню"
         printf 'Выберите пункт: '
         IFS= read -r canary_choice || return
         case "$canary_choice" in
@@ -2930,9 +3197,11 @@ canary_menu() {
             8) [ -s "$LAST_TEST_RESULT" ] && menu_execute show_strategy_test_results "$LAST_TEST_RESULT" ;;
             9) [ -s "$LAST_TEST_RESULT" ] && menu_execute delete_test_results_interactive ;;
             10) [ -s /tmp/kzm-router-canary.state ] && menu_execute stop_live_test_interactive ;;
-            0|'') return ;;
+            s|S) if menu_save_and_exit; then return; else menu_pause; fi ;;
+            0|'') if menu_back_to_main; then return; else menu_pause; fi ;;
             *) say "Неизвестный пункт."; menu_pause ;;
         esac
+        menu_leave_requested && return
     done
 }
 
@@ -2986,7 +3255,10 @@ target_remove_interactive() {
         say "Удалять нечего: пользовательский список пуст."
         return 0
     fi
-    if ! menu_choose_numbered "$KZM_TMP/user-targets.tsv" "Какую запись удалить"; then
+    menu_choose_numbered "$KZM_TMP/user-targets.tsv" "Какую запись удалить"
+    target_remove_menu_rc=$?
+    [ "$target_remove_menu_rc" -ne 20 ] || return 20
+    if [ "$target_remove_menu_rc" -ne 0 ]; then
         say "Удаление отменено."
         return 0
     fi
@@ -3005,16 +3277,17 @@ target_menu() {
         printf '  Режим: %s\n' "$(scope_ru)"
         printf '  Домены: %s\n' "$(awk 'END { print NR+0 }' "$USER_LIST")"
         printf '  IP/подсети: %s\n\n' "$(awk 'END { print NR+0 }' "$USER_IPSET")"
+        menu_pending_notice
         if [ -e "$NFQWS2_INIT" ]; then
-            printf '  Внимание: сейчас работает nfqws2; этот список сохранится,\n'
-            printf '  но начнёт участвовать в трафике только после безопасного перехода на zapret1.\n\n'
+            ui_warn_line "nfqws2 активен: список заработает после перехода на zapret1."
+            printf '\n'
         fi
-        printf '  1) Показать список\n'
-        printf '  2) Добавить домен\n'
-        printf '  3) Добавить IP или подсеть\n'
-        printf '  4) Удалить запись по номеру\n'
-        printf '  5) Изменить область действия\n'
-        printf '  Enter) Назад\n\n'
+        menu_option 1 "Показать список"
+        menu_option 2 "Добавить домен"
+        menu_option 3 "Добавить IP или подсеть"
+        menu_option 4 "Удалить запись по номеру"
+        menu_option 5 "Изменить область действия"
+        menu_footer "Назад в главное меню"
         printf 'Выберите пункт: '
         IFS= read -r target_choice || return
         case "$target_choice" in
@@ -3023,9 +3296,11 @@ target_menu() {
             3) menu_execute network_add_interactive ;;
             4) menu_execute target_remove_interactive ;;
             5) scope_menu ;;
-            0|'') return ;;
+            s|S) if menu_save_and_exit; then return; else menu_pause; fi ;;
+            0|'') if menu_back_to_main; then return; else menu_pause; fi ;;
             *) say "Неизвестный пункт."; menu_pause ;;
         esac
+        menu_leave_requested && return
     done
 }
 
@@ -3057,7 +3332,10 @@ restore_backup_interactive() {
         say "Резервных копий пока нет."
         return 0
     fi
-    if ! menu_choose_numbered "$KZM_TMP/backups.tsv" "Какую копию восстановить"; then
+    menu_choose_numbered "$KZM_TMP/backups.tsv" "Какую копию восстановить"
+    restore_menu_rc=$?
+    [ "$restore_menu_rc" -ne 20 ] || return 20
+    if [ "$restore_menu_rc" -ne 0 ]; then
         say "Восстановление отменено."
         return 0
     fi
@@ -3073,19 +3351,22 @@ backup_menu() {
     while :; do
         menu_clear
         printf 'Резервные копии nfqws.conf\n\n'
-        printf '  1) Показать список\n'
-        printf '  2) Создать копию сейчас\n'
-        printf '  3) Восстановить копию без перезапуска\n'
-        printf '  Enter) Назад\n\n'
+        menu_pending_notice
+        menu_option 1 "Показать список"
+        menu_option 2 "Создать копию сейчас"
+        menu_option 3 "Восстановить копию без перезапуска"
+        menu_footer "Назад"
         printf 'Выберите пункт: '
         IFS= read -r backup_choice || return
         case "$backup_choice" in
             1) menu_execute show_backups_interactive ;;
             2) menu_execute create_backup ;;
             3) menu_execute restore_backup_interactive ;;
-            0|'') return ;;
+            s|S) if menu_save_and_exit; then return; else menu_pause; fi ;;
+            0|'') if menu_back_to_main; then return; else menu_pause; fi ;;
             *) say "Неизвестный пункт."; menu_pause ;;
         esac
+        menu_leave_requested && return
     done
 }
 
@@ -3123,15 +3404,16 @@ advanced_menu() {
     while :; do
         menu_clear
         printf 'Дополнительные возможности\n\n'
-        printf '  1) Показать итоговую техническую стратегию\n'
-        printf '  2) Записать конфиг без перезапуска\n'
-        printf '  3) Перезапустить классический nfqws\n'
-        printf '  4) Резервные копии nfqws.conf\n'
-        printf '  5) Проверить и очистить журналы на флешке\n'
-        printf '  6) Очистить список автообнаружения\n'
-        printf '  7) Полная диагностика окружения\n'
-        printf '  8) Показать команды для ручного управления\n'
-        printf '  Enter) Назад в главное меню\n\n'
+        menu_pending_notice
+        menu_option 1 "Итоговая техническая стратегия"
+        menu_option 2 "Записать конфиг без перезапуска"
+        menu_option 3 "Перезапустить классический nfqws"
+        menu_option 4 "Резервные копии nfqws.conf"
+        menu_option 5 "Проверить и очистить журналы на флешке"
+        menu_option 6 "Очистить список автообнаружения"
+        menu_option 7 "Полная диагностика окружения"
+        menu_option 8 "Команды для ручного управления"
+        menu_footer "Назад в главное меню"
         printf 'Выберите пункт: '
         IFS= read -r advanced_choice || return
         case "$advanced_choice" in
@@ -3143,14 +3425,17 @@ advanced_menu() {
             6) menu_execute cleanup_auto_interactive ;;
             7) menu_execute doctor_command ;;
             8) menu_execute usage ;;
-            0|'') return ;;
+            s|S) if menu_save_and_exit; then return; else menu_pause; fi ;;
+            0|'') if menu_back_to_main; then return; else menu_pause; fi ;;
             *) say "Неизвестный пункт."; menu_pause ;;
         esac
+        menu_leave_requested && return
     done
 }
 
 interactive_menu() {
     ensure_layout
+    MENU_FLOW=
     while :; do
         menu_clear
         printf '╔════════════════════════════════════╗\n'
@@ -3160,17 +3445,18 @@ interactive_menu() {
         printf '  YouTube:     %s\n' "$(youtube_status_ru)"
         printf '  Discord:     %s\n' "$(discord_status_ru)"
         printf '  Игровой UDP: %s\n' "$(enabled_ru "$GAME_ENABLED")"
-        printf '  Движок:      %s\n' "$(engine_status_ru)"
-        printf '  Настройки:   %s\n' "$(configuration_status_ru)"
-        printf '  Каталог:     %s\n\n' "$(catalog_status_ru)"
-        printf '  1) Меню стратегий\n'
-        printf '  2) Мои сайты и IP/подсети\n'
-        printf '  3) Меню тестирования стратегий\n'
-        printf '  4) Обновить стратегии и файлы обхода\n'
-        printf '  5) Применить выбранные настройки\n'
-        printf '  6) Показать полное состояние\n'
-        printf '  7) Дополнительные возможности\n'
-        printf '  Enter) Выход\n\n'
+        printf '  Движок:      %s\n' "$(engine_status_ui)"
+        printf '  Настройки:   %s\n' "$(configuration_status_ui)"
+        printf '  Каталог:     %s\n\n' "$(catalog_status_ui)"
+        menu_pending_notice
+        menu_option 1 "Стратегии"
+        menu_option 2 "Мои сайты и IP/подсети"
+        menu_option 3 "Тестирование стратегий"
+        menu_option 4 "Обновить стратегии и файлы обхода"
+        menu_option 5 "Сохранить и применить сейчас"
+        menu_option 6 "Полное состояние"
+        menu_option 7 "Дополнительные возможности"
+        menu_footer "Выход в Keenetic Manager"
         printf 'Выберите пункт: '
         IFS= read -r menu_choice || return
         case "$menu_choice" in
@@ -3181,9 +3467,11 @@ interactive_menu() {
             5) menu_execute apply_interactive ;;
             6) menu_execute status_command ;;
             7) advanced_menu ;;
-            0|'') return ;;
+            s|S) if menu_save_and_exit; then return; else menu_pause; fi ;;
+            0|'') if menu_back_to_main; then return; else menu_pause; fi ;;
             *) say "Неизвестный пункт."; menu_pause ;;
         esac
+        menu_leave_requested && return
     done
 }
 

@@ -8,7 +8,7 @@ umask 077
 PATH="/opt/usr/sbin:/opt/usr/bin:/opt/sbin:/opt/bin:${PATH:-/usr/sbin:/usr/bin:/sbin:/bin}"
 export PATH
 
-KZM_VERSION="0.8.1"
+KZM_VERSION="0.8.2"
 KZM_ROOT="${KZM_ROOT:-}"
 KZM_PREFIX="${KZM_PREFIX:-/opt}"
 KZM_BASE="${KZM_BASE:-${KZM_ROOT}${KZM_PREFIX}}"
@@ -46,17 +46,59 @@ RESOLVED_DIGEST=""
 RESOLVED_URL=""
 RESOLVED_BINARY_SHA=""
 
+UI_RESET=
+UI_DIM=
+UI_NUMBER=
+UI_GOOD=
+UI_BAD=
+UI_WARN=
+
+init_ui_colors() {
+    case "${KZM_COLOR:-auto}" in
+        always) ui_color_enabled=1 ;;
+        never) ui_color_enabled=0 ;;
+        auto)
+            if [ -t 1 ] 2>/dev/null && [ -n "${TERM:-}" ] && [ "$TERM" != dumb ] && [ -z "${NO_COLOR:-}" ]; then
+                ui_color_enabled=1
+            else
+                ui_color_enabled=0
+            fi
+            ;;
+        *) ui_color_enabled=0 ;;
+    esac
+    [ "$ui_color_enabled" -eq 1 ] || return 0
+    ui_escape=$(printf '\033')
+    UI_RESET="${ui_escape}[0m"
+    UI_DIM="${ui_escape}[2m"
+    UI_NUMBER="${ui_escape}[36m"
+    UI_GOOD="${ui_escape}[32m"
+    UI_BAD="${ui_escape}[31m"
+    UI_WARN="${ui_escape}[33m"
+}
+
+init_ui_colors
+
 say() {
     printf '%s\n' "$*"
 }
 
 warn() {
-    printf 'Внимание: %s\n' "$*" >&2
+    printf '%s[!]%s %s\n' "$UI_WARN" "$UI_RESET" "$*" >&2
 }
 
 die() {
-    printf 'Ошибка: %s\n' "$*" >&2
+    printf '%s[X]%s %s\n' "$UI_BAD" "$UI_RESET" "$*" >&2
     exit 1
+}
+
+menu_option() {
+    menu_option_key=$1
+    shift
+    printf '  %s%s)%s %s\n' "$UI_NUMBER" "$menu_option_key" "$UI_RESET" "$*"
+}
+
+menu_back_option() {
+    printf '  %sEnter)%s %s\n' "$UI_DIM" "$UI_RESET" "$*"
 }
 
 allow_test_artifacts() {
@@ -188,8 +230,9 @@ menu_pause() {
 confirm_numeric() {
     confirm_text=$1
     printf '%s\n\n' "$confirm_text"
-    printf '  1) Да\n'
-    printf '  Enter) Нет\n\n'
+    menu_option 1 "Да"
+    menu_back_option "Нет"
+    printf '\n'
     printf 'Выберите пункт: '
     IFS= read -r confirm_choice || return 1
     [ "$confirm_choice" = "1" ]
@@ -204,9 +247,9 @@ component_valid() {
 
 component_title() {
     case "$1" in
-        socks5) say "TG WS Proxy SOCKS5 — by d0mhate" ;;
-        rust) say "TG WS Proxy Rust — by valnesfjord" ;;
-        mtproto) say "TG WS Proxy MTProto — by spatiumstas" ;;
+        socks5) say "TG WS Proxy SOCKS5 - by d0mhate" ;;
+        rust) say "TG WS Proxy Rust - by valnesfjord" ;;
+        mtproto) say "TG WS Proxy MTProto - by spatiumstas" ;;
         *) say "$1" ;;
     esac
 }
@@ -409,6 +452,35 @@ zapret_state_ru() {
         say "установлен, запущен"
     else
         say "установлен, не запущен"
+    fi
+}
+
+component_state_ui() {
+    state_ui_component=$1
+    state_ui_text=$(component_state_ru "$state_ui_component")
+    if ! component_installed "$state_ui_component"; then
+        if component_present "$state_ui_component"; then
+            printf '%s[X]%s %s' "$UI_BAD" "$UI_RESET" "$state_ui_text"
+        else
+            printf '%s[ ]%s %s' "$UI_DIM" "$UI_RESET" "$state_ui_text"
+        fi
+    elif ! component_install_complete "$state_ui_component"; then
+        printf '%s[!]%s %s' "$UI_WARN" "$UI_RESET" "$state_ui_text"
+    elif component_running "$state_ui_component"; then
+        printf '%s[OK]%s %s' "$UI_GOOD" "$UI_RESET" "$state_ui_text"
+    else
+        printf '%s[!]%s %s' "$UI_WARN" "$UI_RESET" "$state_ui_text"
+    fi
+}
+
+zapret_state_ui() {
+    zapret_ui_text=$(zapret_state_ru)
+    if ! zapret_installed; then
+        printf '%s[ ]%s %s' "$UI_DIM" "$UI_RESET" "$zapret_ui_text"
+    elif zapret_running; then
+        printf '%s[OK]%s %s' "$UI_GOOD" "$UI_RESET" "$zapret_ui_text"
+    else
+        printf '%s[X]%s %s' "$UI_BAD" "$UI_RESET" "$zapret_ui_text"
     fi
 }
 
@@ -1242,11 +1314,12 @@ install_menu() {
         if ! component_present socks5; then socks_action="Установить"; elif component_install_complete socks5; then socks_action="Удалить"; else socks_action="Завершить установку"; fi
         if ! component_present rust; then rust_action="Установить"; elif component_install_complete rust; then rust_action="Удалить"; else rust_action="Завершить установку"; fi
         if ! component_present mtproto; then mtproto_action="Установить"; elif component_install_complete mtproto; then mtproto_action="Удалить"; else mtproto_action="Завершить установку"; fi
-        printf '  1) %s Zapret (движок nfqws-keenetic)\n' "$zapret_action"
-        printf '  2) %s TG WS Proxy SOCKS5 — by d0mhate [экспериментально]\n' "$socks_action"
-        printf '  3) %s TG WS Proxy Rust — by valnesfjord [рекомендуется]\n' "$rust_action"
-        printf '  4) %s TG WS Proxy MTProto — by spatiumstas [экспериментально]\n' "$mtproto_action"
-        printf '  Enter) Назад\n\n'
+        menu_option 1 "$zapret_action Zapret (nfqws-keenetic)"
+        menu_option 2 "$socks_action TG WS Proxy SOCKS5 - d0mhate [экспериментально]"
+        menu_option 3 "$rust_action TG WS Proxy Rust - valnesfjord [рекомендуется]"
+        menu_option 4 "$mtproto_action TG WS Proxy MTProto - spatiumstas [экспериментально]"
+        menu_back_option "Назад"
+        printf '\n'
         printf 'Выберите пункт: '
         IFS= read -r install_choice || return
         case "$install_choice" in
@@ -1280,17 +1353,18 @@ proxy_component_menu() {
     while :; do
         menu_clear
         printf '%s\n\n' "$(component_title "$proxy_component")"
-        printf '  Состояние: %s\n' "$(component_state_ru "$proxy_component")"
+        printf '  Состояние: %s\n' "$(component_state_ui "$proxy_component")"
         if [ "$proxy_component" = rust ]; then
-            printf '  Маршрут: гибридный — DC4 напрямую, остальные через Cloudflare\n'
+            printf '  Маршрут: DC4 напрямую, остальные через Cloudflare\n'
         fi
         printf '\n'
-        printf '  1) Запустить и включить автозапуск\n'
-        printf '  2) Остановить и отключить автозапуск\n'
-        printf '  3) Проверить и установить обновление\n'
-        printf '  4) Показать ссылку подключения\n'
-        printf '  5) Удалить\n'
-        printf '  Enter) Назад\n\n'
+        menu_option 1 "Запустить и включить автозапуск"
+        menu_option 2 "Остановить и отключить автозапуск"
+        menu_option 3 "Проверить и установить обновление"
+        menu_option 4 "Показать ссылку подключения"
+        menu_option 5 "Удалить"
+        menu_back_option "Назад"
+        printf '\n'
         printf 'Выберите пункт: '
         IFS= read -r proxy_choice || return
         case "$proxy_choice" in
@@ -1325,10 +1399,11 @@ proxy_menu() {
     while :; do
         menu_clear
         printf 'Telegram-прокси\n\n'
-        printf '  1) TG WS Proxy SOCKS5 — %s\n' "$(component_state_ru socks5)"
-        printf '  2) TG WS Proxy Rust — %s\n' "$(component_state_ru rust)"
-        printf '  3) TG WS Proxy MTProto — %s\n' "$(component_state_ru mtproto)"
-        printf '  Enter) Назад\n\n'
+        menu_option 1 "TG WS Proxy SOCKS5 - $(component_state_ui socks5)"
+        menu_option 2 "TG WS Proxy Rust - $(component_state_ui rust)"
+        menu_option 3 "TG WS Proxy MTProto - $(component_state_ui mtproto)"
+        menu_back_option "Назад"
+        printf '\n'
         printf 'Выберите пункт: '
         IFS= read -r proxy_menu_choice || return
         case "$proxy_menu_choice" in
@@ -1358,16 +1433,17 @@ main_menu() {
         printf '╔════════════════════════════════════╗\n'
         printf '║       Keenetic Manager %-8s    ║\n' "$KZM_VERSION"
         printf '╚════════════════════════════════════╝\n\n'
-        printf '  Zapret:          %s\n' "$(zapret_state_ru)"
-        printf '  TG SOCKS5:       %s\n' "$(component_state_ru socks5)"
-        printf '  TG Rust:         %s\n' "$(component_state_ru rust)"
-        printf '  TG MTProto:      %s\n\n' "$(component_state_ru mtproto)"
-        printf '  1) Zapret — стратегии, сайты и тесты\n'
-        printf '  2) Установка и удаление\n'
-        printf '  3) Управление Telegram-прокси\n'
-        printf '  4) Обновить установленные Telegram-прокси\n'
-        printf '  5) Показать полное состояние\n'
-        printf '  Enter) Выход\n\n'
+        printf '  Zapret:          %s\n' "$(zapret_state_ui)"
+        printf '  TG SOCKS5:       %s\n' "$(component_state_ui socks5)"
+        printf '  TG Rust:         %s\n' "$(component_state_ui rust)"
+        printf '  TG MTProto:      %s\n\n' "$(component_state_ui mtproto)"
+        menu_option 1 "Zapret: стратегии, сайты и тесты"
+        menu_option 2 "Установка и удаление"
+        menu_option 3 "Telegram-прокси"
+        menu_option 4 "Обновить установленные Telegram-прокси"
+        menu_option 5 "Полное состояние"
+        menu_back_option "Выход"
+        printf '\n'
         printf 'Выберите пункт: '
         IFS= read -r main_choice || return
         case "$main_choice" in
