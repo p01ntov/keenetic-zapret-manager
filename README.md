@@ -75,18 +75,31 @@ Entware. Он загружает знакомые профили `v`, Flowseal, 
 
 ### 1. Установите менеджер
 
-Подключитесь к роутеру по SSH и скачайте свежую версию из GitHub:
+Есть два способа установки.
+
+#### Вариант A — распаковать архив вручную
+
+Скачайте `keenetic-zapret-manager.tar.gz` со страницы Releases, создайте для
+него отдельный каталог и распакуйте архив туда. Скопируйте этот каталог на
+роутер, откройте его по SSH и запустите:
 
 ```sh
-KZM_TMP="$(mktemp -d /tmp/kzm-install.XXXXXX)" || exit 1
-cd "$KZM_TMP" || exit 1
-curl -fL https://github.com/p01ntov/keenetic-zapret-manager/releases/download/v0.8.1/keenetic-zapret-manager.tar.gz -o kzm.tar.gz
-tar -xzf kzm.tar.gz
 sh install.sh
 ```
 
-Если проект уже скачан на компьютер, можно вместо этого скопировать каталог на
-роутер и запустить `sh install.sh` из него.
+#### Вариант B — скачать с GitHub прямо на роутере
+
+Подключитесь к роутеру по SSH и выполните:
+
+```sh
+curl -fsSL \
+  https://raw.githubusercontent.com/p01ntov/keenetic-zapret-manager/v0.8.1/bootstrap.sh \
+  -o /tmp/kzm-bootstrap.sh && \
+sh /tmp/kzm-bootstrap.sh
+```
+
+Bootstrap загружает закреплённый релиз `v0.8.1` во временный каталог `/tmp`,
+проверяет SHA-256 и только после этого запускает обычный `install.sh`.
 
 Установщик ставит только KZM. Он не удаляет другой движок, не запускает службы
 и не перезапускает сеть — решение о переходе остаётся за вами.
@@ -393,6 +406,7 @@ opkg install curl
 sh tests/run.sh
 sh tests/install-upgrade.sh
 sh tests/components.sh
+sh tests/bootstrap.sh
 ```
 
 Необязательная проверка импорта из актуальных upstream-репозиториев:

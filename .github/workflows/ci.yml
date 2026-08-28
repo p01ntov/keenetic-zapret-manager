@@ -23,4 +23,4 @@ jobs:
             -v "$PWD:/work" \
             -w /work \
             ubuntu:24.04 \
-            sh -lc 'sh tests/run.sh && sh tests/install-upgrade.sh && sh tests/components.sh'
+            sh -lc 'sh tests/run.sh && sh tests/install-upgrade.sh && sh tests/components.sh && sh tests/bootstrap.sh'
