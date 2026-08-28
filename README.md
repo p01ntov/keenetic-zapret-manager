@@ -80,7 +80,7 @@ Entware. Он загружает знакомые профили `v`, Flowseal, 
 ```sh
 KZM_TMP="$(mktemp -d /tmp/kzm-install.XXXXXX)" || exit 1
 cd "$KZM_TMP" || exit 1
-curl -fL https://github.com/p01ntov/keenetic-zapret-manager/releases/download/v0.8.1-beta/keenetic-zapret-manager.tar.gz -o kzm.tar.gz
+curl -fL https://github.com/p01ntov/keenetic-zapret-manager/releases/download/v0.8.1/keenetic-zapret-manager.tar.gz -o kzm.tar.gz
 tar -xzf kzm.tar.gz
 sh install.sh
 ```
