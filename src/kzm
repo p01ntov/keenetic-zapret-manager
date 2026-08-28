@@ -2,7 +2,7 @@
 
 set -u
 
-KZM_VERSION="0.8.2"
+KZM_VERSION="0.8.3"
 KZM_ROOT="${KZM_ROOT:-}"
 KZM_PREFIX="${KZM_PREFIX:-/opt}"
 KZM_BASE="${KZM_ROOT}${KZM_PREFIX}"
@@ -38,6 +38,7 @@ ACTIVE_STRATEGY="$KZM_ETC/active.strategy"
 CONFIGURED_STATE="$KZM_ETC/configured-state.conf"
 RUNNING_STATE="$KZM_ETC/running-state.conf"
 PENDING_CHANGES="$KZM_ETC/pending-changes"
+QUIC_POLICY_HELPER="$KZM_LIBEXEC/quic-policy.sh"
 LAST_TEST_RESULT="$RESULT_DIR/last-strategy-test.csv"
 LAST_TEST_META="$RESULT_DIR/last-strategy-test.meta"
 USER_LIST="$LIST_DIR/user.list"
@@ -81,12 +82,27 @@ if [ "$MIN_FULL_TEST_TARGETS" -lt 23 ] 2>/dev/null; then
     MIN_FULL_TEST_TARGETS=23
 fi
 
+normalize_quic_state() {
+    case "${QUIC_MODE:-}" in
+        '')
+            case "${QUIC_ENABLED:-0}" in
+                1) QUIC_MODE=bypass ;;
+                0|'') QUIC_MODE=off ;;
+                *) QUIC_MODE=invalid ;;
+            esac
+            ;;
+        bypass) QUIC_ENABLED=1 ;;
+        block|off) QUIC_ENABLED=0 ;;
+    esac
+}
+
 GENERAL_PROFILE=v7
 YOUTUBE_PROFILE=Yv08
 DISCORD_ENABLED=0
 DISCORD_MEDIA_PROFILE=Dv1
 DISCORD_SCRIPT=off
 DISCORD_FAKE=stun.bin
+QUIC_MODE=
 QUIC_ENABLED=0
 GAME_ENABLED=0
 TRAFFIC_SCOPE=all
@@ -95,6 +111,7 @@ if [ -r "$STATE_FILE" ]; then
     # shellcheck disable=SC1090
     . "$STATE_FILE"
 fi
+normalize_quic_state
 
 UI_RESET=
 UI_DIM=
@@ -275,6 +292,7 @@ write_state_file() {
         printf 'DISCORD_MEDIA_PROFILE=%s\n' "$DISCORD_MEDIA_PROFILE"
         printf 'DISCORD_SCRIPT=%s\n' "$DISCORD_SCRIPT"
         printf 'DISCORD_FAKE=%s\n' "$DISCORD_FAKE"
+        printf 'QUIC_MODE=%s\n' "$QUIC_MODE"
         printf 'QUIC_ENABLED=%s\n' "$QUIC_ENABLED"
         printf 'GAME_ENABLED=%s\n' "$GAME_ENABLED"
         printf 'TRAFFIC_SCOPE=%s\n' "$TRAFFIC_SCOPE"
@@ -310,9 +328,13 @@ validate_state() {
         off|stun.bin|stun2.bin|quic_initial_4pda_to.bin|quic_initial_tencent_com.bin|tls_clienthello_sochi_park.bin|quic_initial_www_google_com.bin|quic_initial_steamcommunity_com.bin|quic_initial_5ka_ru.bin|quic_initial_rutube_ru.bin) ;;
         *) die "некорректный DISCORD_FAKE в state.conf" ;;
     esac
-    case "$DISCORD_ENABLED:$QUIC_ENABLED:$GAME_ENABLED" in
-        [01]:[01]:[01]) ;;
-        *) die "флаги Discord/QUIC/Game должны быть 0 или 1" ;;
+    case "$QUIC_MODE:$QUIC_ENABLED" in
+        bypass:1|block:0|off:0) ;;
+        *) die "QUIC_MODE должен быть bypass, block или off" ;;
+    esac
+    case "$DISCORD_ENABLED:$GAME_ENABLED" in
+        [01]:[01]) ;;
+        *) die "флаги Discord/Game должны быть 0 или 1" ;;
     esac
     case "$TRAFFIC_SCOPE" in
         all|list|auto) ;;
@@ -845,7 +867,7 @@ render_composition() {
         append_strategy "$youtube_profile_file" "$render_target" "$KZM_TMP/youtube.normalized" || die "пустая YouTube-стратегия"
     fi
 
-    if [ "$QUIC_ENABLED" -eq 1 ]; then
+    if [ "$QUIC_MODE" = bypass ]; then
         render_quic_strategy "$KZM_TMP/quic.strategy"
         append_strategy "$KZM_TMP/quic.strategy" "$render_target" "$KZM_TMP/quic.normalized" || die "пустой QUIC-блок"
     fi
@@ -939,6 +961,43 @@ create_backup() {
     printf '%s\n' "$backup_path"
 }
 
+quic_mode_from_state_file() {
+    quic_state_file=$1
+    quic_state_mode=
+    quic_state_legacy=
+    if [ -r "$quic_state_file" ]; then
+        quic_state_mode=$(sed -n 's/^QUIC_MODE=//p' "$quic_state_file" | sed -n '1p')
+        quic_state_legacy=$(sed -n 's/^QUIC_ENABLED=//p' "$quic_state_file" | sed -n '1p')
+    fi
+    case "$quic_state_mode" in
+        bypass|block|off) printf '%s\n' "$quic_state_mode" ;;
+        '')
+            if [ "$quic_state_legacy" = 1 ]; then
+                printf 'bypass\n'
+            else
+                printf 'off\n'
+            fi
+            ;;
+        *) return 1 ;;
+    esac
+}
+
+apply_quic_policy_mode() {
+    quic_policy_mode=$1
+    case "$quic_policy_mode" in bypass|block|off) ;; *) return 1 ;; esac
+    # Isolated --root tests must never touch the host firewall. The helper has
+    # its own mocked tests; production runs with an empty KZM_ROOT.
+    if [ -n "$KZM_ROOT" ] && [ "${KZM_TEST_QUIC_POLICY:-0}" != 1 ]; then
+        return 0
+    fi
+    [ -x "$QUIC_POLICY_HELPER" ] || {
+        warn "не найден $QUIC_POLICY_HELPER"
+        return 1
+    }
+    KZM_ROOT="$KZM_ROOT" KZM_PREFIX="$KZM_PREFIX" KZM_ETC="$KZM_ETC" \
+        "$QUIC_POLICY_HELPER" apply "$quic_policy_mode" all
+}
+
 restart_service() {
     [ -x "$NFQWS_INIT" ] || {
         warn "не найден исполняемый $NFQWS_INIT"
@@ -973,6 +1032,9 @@ apply_config() {
     backup_path=$(create_backup) || die "не удалось создать резервную копию; конфиг не изменён"
     had_active_strategy=0
     had_configured_state=0
+    had_running_state=0
+    previous_quic_mode=$(quic_mode_from_state_file "$RUNNING_STATE") ||
+        die "некорректный QUIC_MODE в $RUNNING_STATE"
     if [ -f "$ACTIVE_STRATEGY" ]; then
         cp "$ACTIVE_STRATEGY" "$KZM_TMP/previous-active.strategy" || die "не удалось сохранить метаданные текущего конфига"
         had_active_strategy=1
@@ -980,6 +1042,10 @@ apply_config() {
     if [ -f "$CONFIGURED_STATE" ]; then
         cp "$CONFIGURED_STATE" "$KZM_TMP/previous-configured-state.conf" || die "не удалось сохранить состояние текущего конфига"
         had_configured_state=1
+    fi
+    if [ -f "$RUNNING_STATE" ]; then
+        cp "$RUNNING_STATE" "$KZM_TMP/previous-running-state.conf" || die "не удалось сохранить состояние запущенного конфига"
+        had_running_state=1
     fi
     config_next="$NFQWS_CONFIG.kzm-new"
     cp "$KZM_TMP/nfqws.conf" "$config_next" || die "не удалось подготовить новый конфиг"
@@ -1006,13 +1072,49 @@ apply_config() {
     say "Конфиг записан. Резервная копия: $backup_path"
     if [ "$do_restart" -eq 1 ]; then
         if restart_service; then
-            if cp "$CONFIGURED_STATE" "$RUNNING_STATE.next.$$" && mv "$RUNNING_STATE.next.$$" "$RUNNING_STATE"; then
-                clear_pending_changes
-                ui_good_line "Настройки сохранены, классический nfqws перезапущен."
-            else
+            if ! cp "$CONFIGURED_STATE" "$RUNNING_STATE.next.$$" || ! mv "$RUNNING_STATE.next.$$" "$RUNNING_STATE"; then
                 rm -f "$RUNNING_STATE.next.$$"
-                mark_pending_changes restart
-                die "nfqws перезапущен, но не удалось сохранить его состояние"
+                warn "не удалось сохранить состояние запущенного конфига; выполняю откат"
+                cp "$backup_path" "$NFQWS_CONFIG"
+                if [ "$had_active_strategy" -eq 1 ]; then
+                    cp "$KZM_TMP/previous-active.strategy" "$ACTIVE_STRATEGY"
+                else
+                    rm -f "$ACTIVE_STRATEGY"
+                fi
+                if [ "$had_configured_state" -eq 1 ]; then
+                    cp "$KZM_TMP/previous-configured-state.conf" "$CONFIGURED_STATE"
+                else
+                    rm -f "$CONFIGURED_STATE"
+                fi
+                "$NFQWS_INIT" restart >/dev/null 2>&1 || true
+                mark_pending_changes dirty
+                die "новая конфигурация отменена"
+            fi
+            if apply_quic_policy_mode "$QUIC_MODE"; then
+                clear_pending_changes
+                ui_good_line "Настройки сохранены, nfqws и режим QUIC применены."
+            else
+                warn "режим QUIC не применился; возвращаю предыдущую конфигурацию"
+                cp "$backup_path" "$NFQWS_CONFIG"
+                if [ "$had_active_strategy" -eq 1 ]; then
+                    cp "$KZM_TMP/previous-active.strategy" "$ACTIVE_STRATEGY"
+                else
+                    rm -f "$ACTIVE_STRATEGY"
+                fi
+                if [ "$had_configured_state" -eq 1 ]; then
+                    cp "$KZM_TMP/previous-configured-state.conf" "$CONFIGURED_STATE"
+                else
+                    rm -f "$CONFIGURED_STATE"
+                fi
+                if [ "$had_running_state" -eq 1 ]; then
+                    cp "$KZM_TMP/previous-running-state.conf" "$RUNNING_STATE"
+                else
+                    rm -f "$RUNNING_STATE"
+                fi
+                "$NFQWS_INIT" restart >/dev/null 2>&1 || true
+                apply_quic_policy_mode "$previous_quic_mode" >/dev/null 2>&1 || true
+                mark_pending_changes dirty
+                die "новая конфигурация отменена"
             fi
         else
             warn "перезапуск не удался; возвращаю предыдущий конфиг"
@@ -1075,12 +1177,33 @@ select_toggle() {
     case "$toggle_value" in on|1) toggle_number=1 ;; off|0) toggle_number=0 ;; *) die "ожидается on или off" ;; esac
     case "$toggle_name" in
         discord) DISCORD_ENABLED=$toggle_number ;;
-        quic) QUIC_ENABLED=$toggle_number ;;
+        quic)
+            if [ "$toggle_number" -eq 1 ]; then
+                select_quic_mode bypass
+            else
+                select_quic_mode off
+            fi
+            return
+            ;;
         game) GAME_ENABLED=$toggle_number ;;
         *) die "неизвестный переключатель $toggle_name" ;;
     esac
     write_state_file
     ui_warn_line "$toggle_name: $toggle_value. Настройки не сохранены."
+}
+
+select_quic_mode() {
+    selected=$1
+    case "$selected" in
+        bypass|on|1) selected=bypass ;;
+        block|reject|tcp) selected=block ;;
+        off|0) selected=off ;;
+        *) die "режим QUIC должен быть bypass, block или off" ;;
+    esac
+    QUIC_MODE=$selected
+    normalize_quic_state
+    write_state_file
+    ui_warn_line "QUIC: $(quic_mode_ru). Настройки не сохранены."
 }
 
 select_discord_media() {
@@ -1400,6 +1523,15 @@ enabled_ru() {
     fi
 }
 
+quic_mode_ru() {
+    case "$QUIC_MODE" in
+        bypass) printf 'обход через nfqws' ;;
+        block) printf 'быстрый TCP, UDP/443 REJECT' ;;
+        off) printf 'без обработки' ;;
+        *) printf '%s' "$QUIC_MODE" ;;
+    esac
+}
+
 scope_ru() {
     case "$TRAFFIC_SCOPE" in
         all) printf 'весь подходящий трафик' ;;
@@ -1411,15 +1543,9 @@ scope_ru() {
 
 youtube_status_ru() {
     if [ "$YOUTUBE_PROFILE" = off ]; then
-        if [ "$QUIC_ENABLED" -eq 1 ]; then
-            printf 'TCP выключен; обход QUIC включён'
-        else
-            printf 'выключен'
-        fi
-    elif [ "$QUIC_ENABLED" -eq 1 ]; then
-        printf 'включён (TCP %s; QUIC включён)' "$YOUTUBE_PROFILE"
+        printf 'выключен'
     else
-        printf 'включён (TCP %s; QUIC выключен)' "$YOUTUBE_PROFILE"
+        printf 'включён (%s)' "$YOUTUBE_PROFILE"
     fi
 }
 
@@ -1549,8 +1675,11 @@ live_test_status_ru() {
 
 reload_menu_state() {
     if [ -r "$STATE_FILE" ]; then
+        QUIC_MODE=
+        QUIC_ENABLED=0
         # shellcheck disable=SC1090
         . "$STATE_FILE"
+        normalize_quic_state
     fi
 }
 
@@ -1694,6 +1823,7 @@ status_command() {
     say "Keenetic Zapret Manager $KZM_VERSION"
     say "  Сайты:       $(general_profile_label)"
     say "  YouTube:     $(youtube_status_ru)"
+    say "  QUIC:        $(quic_mode_ru)"
     say "  Discord:     $(discord_status_ru)"
     say "  Игровой UDP: $(enabled_ru "$GAME_ENABLED")"
     say "  Охват:       $(scope_ru)"
@@ -1721,6 +1851,29 @@ doctor_command() {
     else
         say "  FAIL классический nfqws-keenetic не установлен полностью"
         failures=$((failures + 1))
+    fi
+    quic_hook="$KZM_BASE/etc/ndm/netfilter.d/091-kzm-quic-policy.sh"
+    if [ -x "$QUIC_POLICY_HELPER" ] && [ -x "$quic_hook" ]; then
+        say "  OK  постоянный режим QUIC"
+    else
+        say "  FAIL постоянный режим QUIC установлен не полностью"
+        failures=$((failures + 1))
+    fi
+    running_quic_mode=$(quic_mode_from_state_file "$RUNNING_STATE") || running_quic_mode=invalid
+    if [ "$running_quic_mode" = block ] && [ -z "$KZM_ROOT" ] && [ -x "$QUIC_POLICY_HELPER" ]; then
+        quic_policy_status=$(
+            KZM_ROOT="$KZM_ROOT" KZM_PREFIX="$KZM_PREFIX" KZM_ETC="$KZM_ETC" \
+                "$QUIC_POLICY_HELPER" status 2>/dev/null
+        ) || quic_policy_status=error
+        case "$quic_policy_status" in
+            *'ipv4=block ipv6=block'|*'ipv4=block ipv6=unavailable')
+                say "  OK  быстрый TCP активен: $quic_policy_status"
+                ;;
+            *)
+                say "  FAIL выбран быстрый TCP, но правило не активно: $quic_policy_status"
+                failures=$((failures + 1))
+                ;;
+        esac
     fi
     if [ -e "$NFQWS2_INIT" ]; then
         say "  WARN установлен конфликтующий nfqws2-keenetic"
@@ -1829,10 +1982,20 @@ service_command() {
         restart)
             [ "${2:-}" = "--yes" ] || die "перезапуск может оборвать соединение; добавьте --yes"
             if restart_service; then
+                previous_quic_mode=$(quic_mode_from_state_file "$RUNNING_STATE") ||
+                    die "некорректный QUIC_MODE в $RUNNING_STATE"
+                configured_quic_mode=$(quic_mode_from_state_file "$CONFIGURED_STATE") ||
+                    die "некорректный QUIC_MODE в $CONFIGURED_STATE"
+                if ! apply_quic_policy_mode "$configured_quic_mode"; then
+                    apply_quic_policy_mode "$previous_quic_mode" >/dev/null 2>&1 || true
+                    mark_pending_changes restart
+                    die "nfqws перезапущен, но режим QUIC не применился"
+                fi
                 if [ -f "$CONFIGURED_STATE" ]; then
                     if ! cp "$CONFIGURED_STATE" "$RUNNING_STATE.next.$$" || \
                             ! mv "$RUNNING_STATE.next.$$" "$RUNNING_STATE"; then
                         rm -f "$RUNNING_STATE.next.$$"
+                        apply_quic_policy_mode "$previous_quic_mode" >/dev/null 2>&1 || true
                         die "nfqws перезапущен, но не удалось сохранить его состояние"
                     fi
                 fi
@@ -3009,15 +3172,30 @@ toggle_discord_interactive() {
     fi
 }
 
-toggle_quic_interactive() {
-    if [ "$QUIC_ENABLED" -eq 1 ]; then
-        select_toggle quic off
-        say "YouTube продолжит использовать TCP-профиль $YOUTUBE_PROFILE."
-    else
-        say "QUIC добавляет обход UDP/443 только для доменов YouTube."
-        say "Если Mihomo блокирует UDP/443 раньше nfqws, этот блок нужно отключить отдельно."
-        select_toggle quic on
-    fi
+quic_mode_menu() {
+    while :; do
+        menu_clear
+        printf 'Режим QUIC\n\n'
+        printf '  Сейчас: %s\n\n' "$(quic_mode_ru)"
+        menu_pending_notice
+        menu_option 1 "Обход через nfqws [только YouTube]"
+        menu_option 2 "Быстрый TCP [REJECT UDP/443 для всех устройств]"
+        menu_option 3 "Без обработки QUIC"
+        say "Быстрый TCP отключает HTTP/3 во всей домашней сети."
+        say "Для YouTube нужен рабочий TCP-профиль Yv."
+        menu_footer "Назад в меню стратегий"
+        printf 'Выберите пункт: '
+        IFS= read -r quic_choice || return
+        case "$quic_choice" in
+            1) menu_execute select_quic_mode bypass ;;
+            2) menu_execute select_quic_mode block ;;
+            3) menu_execute select_quic_mode off ;;
+            s|S) if menu_save_and_exit; then return; else menu_pause; fi ;;
+            0|'') if menu_back_to_main; then return; else menu_pause; fi ;;
+            *) say "Неизвестный пункт."; menu_pause ;;
+        esac
+        menu_leave_requested && return
+    done
 }
 
 toggle_game_interactive() {
@@ -3102,6 +3280,7 @@ strategies_menu() {
         printf 'Меню стратегий\n\n'
         printf '  Сайты:       %s\n' "$(general_profile_label)"
         printf '  YouTube:     %s\n' "$(youtube_status_ru)"
+        printf '  QUIC:        %s\n' "$(quic_mode_ru)"
         printf '  Discord:     %s\n' "$(discord_status_ru)"
         printf '  Игровой UDP: %s\n' "$(enabled_ru "$GAME_ENABLED")"
         printf '  Охват:       %s\n\n' "$(scope_ru)"
@@ -3109,11 +3288,7 @@ strategies_menu() {
         menu_option 1 "Основная стратегия для сайтов"
         menu_option 2 "Стратегия YouTube"
         menu_option 3 "Настроить Discord"
-        if [ "$QUIC_ENABLED" -eq 1 ]; then
-            menu_option 4 "Выключить обход YouTube QUIC (UDP/443)"
-        else
-            menu_option 4 "Включить обход YouTube QUIC (UDP/443)"
-        fi
+        menu_option 4 "Режим QUIC"
         if [ "$GAME_ENABLED" -eq 1 ]; then
             menu_option 5 "Выключить игровой UDP"
         else
@@ -3127,7 +3302,7 @@ strategies_menu() {
             1) menu_execute choose_general_interactive ;;
             2) menu_execute choose_youtube_interactive ;;
             3) discord_menu ;;
-            4) menu_execute toggle_quic_interactive ;;
+            4) quic_mode_menu ;;
             5) menu_execute toggle_game_interactive ;;
             6) scope_menu ;;
             s|S) if menu_save_and_exit; then return; else menu_pause; fi ;;
@@ -3443,6 +3618,7 @@ interactive_menu() {
         printf '╚════════════════════════════════════╝\n\n'
         printf '  Сайты:       %s\n' "$(general_profile_label)"
         printf '  YouTube:     %s\n' "$(youtube_status_ru)"
+        printf '  QUIC:        %s\n' "$(quic_mode_ru)"
         printf '  Discord:     %s\n' "$(discord_status_ru)"
         printf '  Игровой UDP: %s\n' "$(enabled_ru "$GAME_ENABLED")"
         printf '  Движок:      %s\n' "$(engine_status_ui)"
@@ -3504,7 +3680,8 @@ usage() {
   strategy set discord-media <DvN|off>
   strategy set discord-script <off|50-discord-media>
   strategy set discord-fake <NAME|off>
-  strategy set quic <on|off>        QUIC UDP/443 для списка YouTube
+  strategy set quic <bypass|block|off>
+                                    обход YouTube, быстрый TCP или без обработки
   strategy set game <on|off>
   strategy set scope <all|list|auto>
   strategy import <NAME> <FILE>     импортировать custom-стратегию
@@ -3579,7 +3756,8 @@ main() {
                     case "$target" in
                         general) select_general "$value" ;;
                         youtube) select_youtube "$value" ;;
-                        discord|quic|game) select_toggle "$target" "$value" ;;
+                        discord|game) select_toggle "$target" "$value" ;;
+                        quic) select_quic_mode "$value" ;;
                         discord-media) select_discord_media "$value" ;;
                         discord-script) select_discord_script "$value" ;;
                         discord-fake) select_discord_fake "$value" ;;

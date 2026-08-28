@@ -155,6 +155,8 @@ run_with_mocks() {
 sh "$PROJECT_DIR/install.sh" --root "$TEST_ROOT" >/dev/null
 assert_same "$PROJECT_DIR/src/kzm.conf" "$TEST_ROOT/opt/etc/kzapret-manager/kzm.conf"
 assert_executable "$TEST_ROOT/opt/bin/kzm"
+assert_executable "$TEST_ROOT/opt/libexec/kzm/quic-policy.sh"
+assert_executable "$TEST_ROOT/opt/etc/ndm/netfilter.d/091-kzm-quic-policy.sh"
 assert_no_install_artifacts
 
 EXPECTED_DIR="$TEST_ROOT/expected"

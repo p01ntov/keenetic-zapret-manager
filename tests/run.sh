@@ -39,19 +39,150 @@ sh "$PROJECT_DIR/install.sh" --root "$TEST_ROOT" >/dev/null
 release_version=$(sed -n '1p' "$PROJECT_DIR/VERSION")
 component_version=$(sed -n 's/^KZM_VERSION="\([^"]*\)"$/\1/p' \
     "$PROJECT_DIR/src/libexec/kzm/component-manager.sh")
-[ "$release_version" = "0.8.2" ]
+[ "$release_version" = "0.8.3" ]
 [ "$(KZM_ROOT="$TEST_ROOT" "$TEST_ROOT/opt/bin/kzm" version)" = "$release_version" ]
 [ "$component_version" = "$release_version" ]
 [ -x "$TEST_ROOT/opt/libexec/kzm/mediatek-gro-fix.sh" ]
+[ -x "$TEST_ROOT/opt/libexec/kzm/quic-policy.sh" ]
 [ -x "$TEST_ROOT/opt/etc/init.d/S50kzm-gro-fix" ]
 [ -x "$TEST_ROOT/opt/etc/ndm/netfilter.d/090-kzm-gro-fix.sh" ]
+[ -x "$TEST_ROOT/opt/etc/ndm/netfilter.d/091-kzm-quic-policy.sh" ]
 KZM_ROOT="$TEST_ROOT" "$TEST_ROOT/opt/bin/kzm" test status | grep -q 'Canary inactive'
-KZM_ROOT="$TEST_ROOT" "$TEST_ROOT/opt/bin/kzm" status | grep -q 'YouTube:.*QUIC выключен'
+KZM_ROOT="$TEST_ROOT" "$TEST_ROOT/opt/bin/kzm" status | grep -q 'YouTube:.*включён (Yv08)'
+KZM_ROOT="$TEST_ROOT" "$TEST_ROOT/opt/bin/kzm" status | grep -q 'QUIC:.*без обработки'
 for youtube_app_domain in youtube.com googlevideo.com youtubei.googleapis.com youtubei-att.googleapis.com youtube.googleapis.com ytimg.com ggpht.com; do
     grep -qx "$youtube_app_domain" "$TEST_ROOT/opt/etc/kzapret-manager/lists/youtube.list"
 done
 KZM_ROOT="$TEST_ROOT" "$TEST_ROOT/opt/bin/kzm" doctor > "$TEST_ROOT/doctor-initial.txt" 2>&1 || true
 grep -q 'OK  основные домены браузера и приложения YouTube' "$TEST_ROOT/doctor-initial.txt"
+
+# An existing 0.8.2 state has only QUIC_ENABLED. It must retain its meaning and
+# gain QUIC_MODE on the next write without changing the selected behavior.
+legacy_state="$TEST_ROOT/opt/etc/kzapret-manager/state.conf"
+cp "$legacy_state" "$TEST_ROOT/state-before-legacy-test.conf"
+sed '/^QUIC_MODE=/d; s/^QUIC_ENABLED=0$/QUIC_ENABLED=1/' "$legacy_state" > "$legacy_state.legacy"
+mv "$legacy_state.legacy" "$legacy_state"
+KZM_ROOT="$TEST_ROOT" "$TEST_ROOT/opt/bin/kzm" status | grep -q 'QUIC:.*обход через nfqws'
+KZM_ROOT="$TEST_ROOT" "$TEST_ROOT/opt/bin/kzm" strategy set game on >/dev/null
+grep -q '^QUIC_MODE=bypass$' "$legacy_state"
+grep -q '^QUIC_ENABLED=1$' "$legacy_state"
+cp "$TEST_ROOT/state-before-legacy-test.conf" "$legacy_state"
+rm -f "$TEST_ROOT/opt/etc/kzapret-manager/pending-changes"
+
+# The persistent QUIC policy owns a dedicated chain, is idempotent, supports
+# both IP families and rolls IPv4 back if the IPv6 half cannot be installed.
+QUIC_POLICY_TEST_DIR="$TEST_ROOT/quic-policy-test"
+QUIC_POLICY_MOCK_BIN="$QUIC_POLICY_TEST_DIR/bin"
+QUIC_POLICY_MOCK_STATE="$QUIC_POLICY_TEST_DIR/firewall"
+QUIC_POLICY_RUNNING_STATE="$QUIC_POLICY_TEST_DIR/running-state.conf"
+QUIC_POLICY_LOG="$QUIC_POLICY_TEST_DIR/iptables.log"
+mkdir -p "$QUIC_POLICY_MOCK_BIN" "$QUIC_POLICY_MOCK_STATE"
+cat > "$QUIC_POLICY_MOCK_BIN/iptables" <<'EOF'
+#!/bin/sh
+set -u
+mock_name=${0##*/}
+mock_dir="${MOCK_FIREWALL_STATE:?}/$mock_name"
+mkdir -p "$mock_dir"
+printf '%s %s\n' "$mock_name" "$*" >> "${MOCK_FIREWALL_LOG:?}"
+case "${1:-}:${2:-}" in
+    -nL:KZM_QUIC_REJECT) [ -f "$mock_dir/chain" ] ;;
+    -C:FORWARD) [ -f "$mock_dir/jump-forward" ] ;;
+    -C:INPUT) [ -f "$mock_dir/jump-input" ] ;;
+    -C:KZM_QUIC_REJECT) [ -f "$mock_dir/reject" ] ;;
+    -D:FORWARD)
+        [ -f "$mock_dir/jump-forward" ] || exit 1
+        rm -f "$mock_dir/jump-forward"
+        ;;
+    -D:INPUT)
+        [ -f "$mock_dir/jump-input" ] || exit 1
+        rm -f "$mock_dir/jump-input"
+        ;;
+    -N:KZM_QUIC_REJECT)
+        [ ! -f "$mock_dir/chain" ] || exit 1
+        : > "$mock_dir/chain"
+        ;;
+    -F:KZM_QUIC_REJECT)
+        [ -f "$mock_dir/chain" ] || exit 1
+        rm -f "$mock_dir/reject"
+        ;;
+    -X:KZM_QUIC_REJECT)
+        [ -f "$mock_dir/chain" ] || exit 1
+        [ ! -f "$mock_dir/reject" ] || exit 1
+        rm -f "$mock_dir/chain"
+        ;;
+    -A:KZM_QUIC_REJECT)
+        [ -f "$mock_dir/chain" ] || exit 1
+        if [ "$mock_name" = ip6tables ] && [ "${MOCK_FAIL_IPV6:-0}" = 1 ]; then
+            exit 1
+        fi
+        : > "$mock_dir/reject"
+        ;;
+    -I:FORWARD)
+        [ -f "$mock_dir/chain" ] || exit 1
+        : > "$mock_dir/jump-forward"
+        ;;
+    -I:INPUT)
+        [ -f "$mock_dir/chain" ] || exit 1
+        : > "$mock_dir/jump-input"
+        ;;
+    *) exit 2 ;;
+esac
+EOF
+chmod +x "$QUIC_POLICY_MOCK_BIN/iptables"
+cp "$QUIC_POLICY_MOCK_BIN/iptables" "$QUIC_POLICY_MOCK_BIN/ip6tables"
+chmod +x "$QUIC_POLICY_MOCK_BIN/ip6tables"
+
+QUIC_POLICY_HELPER="$TEST_ROOT/opt/libexec/kzm/quic-policy.sh"
+QUIC_POLICY_HOOK="$TEST_ROOT/opt/etc/ndm/netfilter.d/091-kzm-quic-policy.sh"
+run_quic_policy() {
+    MOCK_FIREWALL_STATE="$QUIC_POLICY_MOCK_STATE" \
+    MOCK_FIREWALL_LOG="$QUIC_POLICY_LOG" \
+    KZM_RUNNING_STATE="$QUIC_POLICY_RUNNING_STATE" \
+    KZM_IPTABLES="$QUIC_POLICY_MOCK_BIN/iptables" \
+    KZM_IP6TABLES="$QUIC_POLICY_MOCK_BIN/ip6tables" \
+        "$QUIC_POLICY_HELPER" "$@"
+}
+
+printf 'QUIC_ENABLED=1\n' > "$QUIC_POLICY_RUNNING_STATE"
+run_quic_policy reconcile all
+[ "$(run_quic_policy status)" = 'mode=bypass ipv4=off ipv6=off' ]
+
+printf 'QUIC_MODE=block\nQUIC_ENABLED=0\n' > "$QUIC_POLICY_RUNNING_STATE"
+run_quic_policy reconcile all
+[ "$(run_quic_policy status)" = 'mode=block ipv4=block ipv6=block' ]
+run_quic_policy reconcile all
+grep -q 'iptables -D FORWARD -j KZM_QUIC_REJECT' "$QUIC_POLICY_LOG"
+grep -q 'iptables -D INPUT -j KZM_QUIC_REJECT' "$QUIC_POLICY_LOG"
+grep -q 'iptables.*--reject-with icmp-port-unreachable' "$QUIC_POLICY_LOG"
+grep -q 'ip6tables.*--reject-with icmp6-port-unreachable' "$QUIC_POLICY_LOG"
+
+printf 'QUIC_MODE=off\nQUIC_ENABLED=0\n' > "$QUIC_POLICY_RUNNING_STATE"
+run_quic_policy reconcile all
+[ "$(run_quic_policy status)" = 'mode=off ipv4=off ipv6=off' ]
+
+printf 'QUIC_MODE=block\nQUIC_ENABLED=0\n' > "$QUIC_POLICY_RUNNING_STATE"
+if MOCK_FAIL_IPV6=1 run_quic_policy apply block all >/dev/null 2>&1; then
+    echo "QUIC policy accepted a failed IPv6 half" >&2
+    exit 1
+fi
+[ "$(run_quic_policy status)" = 'mode=block ipv4=off ipv6=off' ]
+
+MOCK_FIREWALL_STATE="$QUIC_POLICY_MOCK_STATE" \
+MOCK_FIREWALL_LOG="$QUIC_POLICY_LOG" \
+KZM_RUNNING_STATE="$QUIC_POLICY_RUNNING_STATE" \
+KZM_IPTABLES="$QUIC_POLICY_MOCK_BIN/iptables" \
+KZM_IP6TABLES="$QUIC_POLICY_MOCK_BIN/ip6tables" \
+KZM_QUIC_POLICY_HELPER="$QUIC_POLICY_HELPER" \
+type=iptables table=filter sh "$QUIC_POLICY_HOOK"
+[ "$(run_quic_policy status)" = 'mode=block ipv4=block ipv6=off' ]
+MOCK_FIREWALL_STATE="$QUIC_POLICY_MOCK_STATE" \
+MOCK_FIREWALL_LOG="$QUIC_POLICY_LOG" \
+KZM_RUNNING_STATE="$QUIC_POLICY_RUNNING_STATE" \
+KZM_IPTABLES="$QUIC_POLICY_MOCK_BIN/iptables" \
+KZM_IP6TABLES="$QUIC_POLICY_MOCK_BIN/ip6tables" \
+KZM_QUIC_POLICY_HELPER="$QUIC_POLICY_HELPER" \
+type=ip6tables table=filter sh "$QUIC_POLICY_HOOK"
+[ "$(run_quic_policy status)" = 'mode=block ipv4=block ipv6=block' ]
 
 # Canary cleanup must never trust a reused numeric PID. These tests use a
 # no-op iptables shim and real /proc identities; no firewall rule is changed.
@@ -435,10 +566,20 @@ grep -q '^GENERAL_PROFILE=flow:general_ALT7$' "$TEST_ROOT/opt/etc/kzapret-manage
 
 printf '1\n2\n1\n\n\n' | KZM_ROOT="$TEST_ROOT" "$TEST_ROOT/opt/bin/kzm" > "$TEST_ROOT/youtube-off-menu.txt"
 grep -q '^YOUTUBE_PROFILE=off$' "$TEST_ROOT/opt/etc/kzapret-manager/state.conf"
-grep -q 'Включить обход YouTube QUIC' "$TEST_ROOT/youtube-off-menu.txt"
+grep -q '4) Режим QUIC' "$TEST_ROOT/youtube-off-menu.txt"
 KZM_ROOT="$TEST_ROOT" "$TEST_ROOT/opt/bin/kzm" strategy set quic on >/dev/null
-KZM_ROOT="$TEST_ROOT" "$TEST_ROOT/opt/bin/kzm" status | grep -q 'YouTube:.*TCP выключен; обход QUIC включён'
+grep -q '^QUIC_MODE=bypass$' "$TEST_ROOT/opt/etc/kzapret-manager/state.conf"
+grep -q '^QUIC_ENABLED=1$' "$TEST_ROOT/opt/etc/kzapret-manager/state.conf"
+KZM_ROOT="$TEST_ROOT" "$TEST_ROOT/opt/bin/kzm" status | grep -q 'YouTube:.*выключен'
+KZM_ROOT="$TEST_ROOT" "$TEST_ROOT/opt/bin/kzm" status | grep -q 'QUIC:.*обход через nfqws'
+printf '1\n4\n2\n\n\n\n' | KZM_ROOT="$TEST_ROOT" "$TEST_ROOT/opt/bin/kzm" > "$TEST_ROOT/quic-mode-menu.txt"
+grep -q 'Быстрый TCP \[REJECT UDP/443 для всех устройств\]' "$TEST_ROOT/quic-mode-menu.txt"
+grep -q 'Для YouTube нужен рабочий TCP-профиль Yv' "$TEST_ROOT/quic-mode-menu.txt"
+grep -q '^QUIC_MODE=block$' "$TEST_ROOT/opt/etc/kzapret-manager/state.conf"
+grep -q '^QUIC_ENABLED=0$' "$TEST_ROOT/opt/etc/kzapret-manager/state.conf"
+KZM_ROOT="$TEST_ROOT" "$TEST_ROOT/opt/bin/kzm" status | grep -q 'QUIC:.*быстрый TCP'
 KZM_ROOT="$TEST_ROOT" "$TEST_ROOT/opt/bin/kzm" strategy set quic off >/dev/null
+grep -q '^QUIC_MODE=off$' "$TEST_ROOT/opt/etc/kzapret-manager/state.conf"
 printf '1\n2\n3\n\n\n' | KZM_ROOT="$TEST_ROOT" "$TEST_ROOT/opt/bin/kzm" > "$TEST_ROOT/youtube-numbered-menu.txt"
 grep -q '^YOUTUBE_PROFILE=Yv08$' "$TEST_ROOT/opt/etc/kzapret-manager/state.conf"
 
@@ -480,7 +621,7 @@ KZM_ROOT="$TEST_ROOT" "$TEST_ROOT/opt/bin/kzm" strategy set general v7 >/dev/nul
 
 KZM_ROOT="$TEST_ROOT" "$TEST_ROOT/opt/bin/kzm" strategy set discord on >/dev/null
 KZM_ROOT="$TEST_ROOT" "$TEST_ROOT/opt/bin/kzm" strategy set discord-media Dv2 >/dev/null
-KZM_ROOT="$TEST_ROOT" "$TEST_ROOT/opt/bin/kzm" strategy set quic on >/dev/null
+KZM_ROOT="$TEST_ROOT" "$TEST_ROOT/opt/bin/kzm" strategy set quic bypass >/dev/null
 KZM_ROOT="$TEST_ROOT" "$TEST_ROOT/opt/bin/kzm" strategy set game on >/dev/null
 KZM_ROOT="$TEST_ROOT" "$TEST_ROOT/opt/bin/kzm" preview > "$TEST_ROOT/preview.txt"
 
@@ -508,6 +649,54 @@ grep -q '^ISP_INTERFACE="ppp0"' "$TEST_ROOT/opt/etc/nfqws/nfqws.conf"
 KZM_ROOT="$TEST_ROOT" "$TEST_ROOT/opt/bin/kzm" service restart --yes >/dev/null
 [ -f "$TEST_ROOT/restart.log" ]
 KZM_ROOT="$TEST_ROOT" "$TEST_ROOT/opt/bin/kzm" status | grep -q 'Настройки:   применена'
+
+# KZM applies the firewall policy in the same transaction as nfqws. A partial
+# IPv6 failure must restore the old config, metadata and policy before retry.
+KZM_POLICY_INTEGRATION_STATE="$TEST_ROOT/quic-policy-integration-firewall"
+KZM_POLICY_INTEGRATION_LOG="$TEST_ROOT/quic-policy-integration.log"
+mkdir -p "$KZM_POLICY_INTEGRATION_STATE"
+run_kzm_with_quic_policy() {
+    MOCK_FIREWALL_STATE="$KZM_POLICY_INTEGRATION_STATE" \
+    MOCK_FIREWALL_LOG="$KZM_POLICY_INTEGRATION_LOG" \
+    KZM_IPTABLES="$QUIC_POLICY_MOCK_BIN/iptables" \
+    KZM_IP6TABLES="$QUIC_POLICY_MOCK_BIN/ip6tables" \
+    KZM_TEST_QUIC_POLICY=1 KZM_ROOT="$TEST_ROOT" \
+        "$TEST_ROOT/opt/bin/kzm" "$@"
+}
+
+cp "$TEST_ROOT/opt/etc/nfqws/nfqws.conf" "$TEST_ROOT/quic-before-failure.conf"
+cp "$TEST_ROOT/opt/etc/kzapret-manager/configured-state.conf" "$TEST_ROOT/quic-before-failure-configured.conf"
+cp "$TEST_ROOT/opt/etc/kzapret-manager/running-state.conf" "$TEST_ROOT/quic-before-failure-running.conf"
+KZM_ROOT="$TEST_ROOT" "$TEST_ROOT/opt/bin/kzm" strategy set quic block >/dev/null
+if MOCK_FAIL_IPV6=1 run_kzm_with_quic_policy apply --restart --yes > "$TEST_ROOT/quic-policy-failure.out" 2>&1; then
+    echo "KZM accepted a partial QUIC policy" >&2
+    exit 1
+fi
+grep -q 'режим QUIC не применился' "$TEST_ROOT/quic-policy-failure.out"
+cmp "$TEST_ROOT/quic-before-failure.conf" "$TEST_ROOT/opt/etc/nfqws/nfqws.conf"
+cmp "$TEST_ROOT/quic-before-failure-configured.conf" "$TEST_ROOT/opt/etc/kzapret-manager/configured-state.conf"
+cmp "$TEST_ROOT/quic-before-failure-running.conf" "$TEST_ROOT/opt/etc/kzapret-manager/running-state.conf"
+grep -qx 'dirty' "$TEST_ROOT/opt/etc/kzapret-manager/pending-changes"
+[ ! -e "$KZM_POLICY_INTEGRATION_STATE/iptables/jump-forward" ]
+[ ! -e "$KZM_POLICY_INTEGRATION_STATE/ip6tables/jump-forward" ]
+
+run_kzm_with_quic_policy apply --restart --yes >/dev/null
+grep -q '^QUIC_MODE=block$' "$TEST_ROOT/opt/etc/kzapret-manager/running-state.conf"
+[ -e "$KZM_POLICY_INTEGRATION_STATE/iptables/jump-forward" ]
+[ -e "$KZM_POLICY_INTEGRATION_STATE/iptables/jump-input" ]
+[ -e "$KZM_POLICY_INTEGRATION_STATE/ip6tables/jump-forward" ]
+[ -e "$KZM_POLICY_INTEGRATION_STATE/ip6tables/jump-input" ]
+if grep -q -- '--dpi-desync-fake-quic=' "$TEST_ROOT/opt/etc/nfqws/nfqws.conf"; then
+    echo "QUIC bypass remained in nfqws while fast TCP was active" >&2
+    exit 1
+fi
+
+KZM_ROOT="$TEST_ROOT" "$TEST_ROOT/opt/bin/kzm" strategy set quic bypass >/dev/null
+run_kzm_with_quic_policy apply --restart --yes >/dev/null
+grep -q '^QUIC_MODE=bypass$' "$TEST_ROOT/opt/etc/kzapret-manager/running-state.conf"
+[ ! -e "$KZM_POLICY_INTEGRATION_STATE/iptables/chain" ]
+[ ! -e "$KZM_POLICY_INTEGRATION_STATE/ip6tables/chain" ]
+grep -q -- '--dpi-desync-fake-quic=' "$TEST_ROOT/opt/etc/nfqws/nfqws.conf"
 
 mkdir -p "$TEST_ROOT/opt/var/log"
 printf 'mihomo-log' > "$TEST_ROOT/opt/var/log/mihomo.log"
@@ -778,11 +967,18 @@ grep -Fq "${ui_cyan}1)${ui_reset} Стратегии" "$UI_TEST_ROOT/ui-color-sa
 grep -Fq "${ui_yellow}[!]${ui_reset} изменения не сохранены" "$UI_TEST_ROOT/ui-color-save.txt"
 grep -Fq "${ui_green}[OK]${ui_reset} Настройки сохранены" "$UI_TEST_ROOT/ui-color-save.txt"
 awk -v cyan="$ui_cyan" -v red="$ui_red" -v green="$ui_green" '
-    /^[[:space:]]/ && $0 ~ /[0-9]+\)/ {
-        count++
-        number_end=index($0, ")")
-        prefix=substr($0, 1, number_end)
-        if (index(prefix, cyan) == 0 || index(prefix, red) != 0 || index(prefix, green) != 0) bad=1
+    /^[[:space:]]/ {
+        colored=$0
+        sub(/^[[:space:]]*/, "", colored)
+        plain=colored
+        esc=sprintf("%c", 27)
+        gsub(esc "\\[[0-9;]*m", "", plain)
+        if (plain ~ /^[0-9]+\)/) {
+            count++
+            number_end=index(colored, ")")
+            prefix=substr(colored, 1, number_end)
+            if (index(prefix, cyan) != 1 || index(prefix, red) != 0 || index(prefix, green) != 0) bad=1
+        }
     }
     END { exit (count >= 7 && !bad) ? 0 : 1 }
 ' "$UI_TEST_ROOT/ui-color-save.txt"

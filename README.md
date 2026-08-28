@@ -95,12 +95,12 @@ sh install.sh
 
 ```sh
 curl -fsSL \
-  https://raw.githubusercontent.com/p01ntov/keenetic-zapret-manager/v0.8.2/bootstrap.sh \
+  https://raw.githubusercontent.com/p01ntov/keenetic-zapret-manager/v0.8.3/bootstrap.sh \
   -o /tmp/kzm-bootstrap.sh && \
 sh /tmp/kzm-bootstrap.sh
 ```
 
-Bootstrap загружает закреплённый релиз `v0.8.2` во временный каталог `/tmp`,
+Bootstrap загружает закреплённый релиз `v0.8.3` во временный каталог `/tmp`,
 проверяет SHA-256 и только после этого запускает обычный `install.sh`.
 
 Установщик ставит только KZM. Он не удаляет другой движок, не запускает службы
@@ -184,10 +184,26 @@ kzm network add 203.0.113.7 198.51.100.0/24 2001:db8::/32
 
 ## YouTube, Discord и QUIC
 
-YouTube использует отдельные профили `Yv`. QUIC управляется отдельным
-переключателем и затрагивает UDP/443 только для встроенного списка YouTube.
-Если Mihomo уже блокирует UDP/443 правилом `REJECT`, отключите это правило в
-самом Mihomo. KZM не редактирует чужую конфигурацию.
+YouTube использует отдельные профили `Yv`. Для QUIC доступны три режима:
+
+- `Обход через nfqws` обрабатывает UDP/443 только для списка YouTube;
+- `Быстрый TCP` отвечает `REJECT` на UDP/443 и сразу переводит приложения на TCP;
+- `Без обработки` не добавляет правила QUIC.
+
+В SSH-панели откройте `Zapret`, затем `Стратегии` и `Режим QUIC`. Все варианты
+выбираются цифрами и применяются при возврате или по клавише `S`.
+
+`Быстрый TCP` действует на все домашние устройства и отключает HTTP/3 во всей
+сети. Некоторые VPN и приложения, использующие UDP/443 без TCP-запаса, могут
+перестать подключаться. KZM создаёт отдельную цепочку `KZM_QUIC_REJECT` для
+IPv4 и IPv6 и восстанавливает её после пересборки firewall Keenetic. Правило
+меняется только после сохранения настроек и участвует в автооткате.
+
+Этот режим только убирает ожидание QUIC и не исправляет неподходящий TCP-профиль.
+Если приложение открывается, но видео не стартует, выберите другой профиль `Yv`.
+
+Если UDP/443 уже блокирует Mihomo, его правило остаётся независимым. KZM не
+редактирует чужую конфигурацию.
 
 Настройка Discord разделена на два независимых блока:
 
@@ -334,7 +350,7 @@ kzm strategy set discord on|off
 kzm strategy set discord-media Dv1|off
 kzm strategy set discord-script 50-discord-media|off
 kzm strategy set discord-fake stun.bin|off
-kzm strategy set quic on|off
+kzm strategy set quic bypass|block|off
 kzm strategy set game on|off
 kzm strategy set scope all|list|auto
 
@@ -403,7 +419,9 @@ opkg install ethtool
 
 Отключение GRO устраняет аппаратные потери вокруг NFQUEUE, но не гарантирует,
 что конкретный провайдер пропустит QUIC. Приложение YouTube может перейти на
-TCP; перед глобальным включением QUIC профиль следует проверить live-тестом.
+TCP; перед включением обхода QUIC профиль следует проверить live-тестом. Если
+Android ждёт несколько секунд и сообщает `ERR_QUIC_PROTOCOL_ERROR`, режим
+`Быстрый TCP` убирает ожидание за счёт немедленного отказа UDP/443.
 
 Если системный `wget` вашей прошивки не справляется с HTTPS, установите
 загрузчик из Entware:

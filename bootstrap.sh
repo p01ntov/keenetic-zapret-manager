@@ -7,7 +7,7 @@ set -eu
 
 umask 077
 
-KZM_RELEASE_TAG=${KZM_RELEASE_TAG:-v0.8.2}
+KZM_RELEASE_TAG=${KZM_RELEASE_TAG:-v0.8.3}
 KZM_REPOSITORY=${KZM_REPOSITORY:-p01ntov/keenetic-zapret-manager}
 KZM_ARCHIVE_NAME=keenetic-zapret-manager.tar.gz
 KZM_CHECKSUM_NAME=$KZM_ARCHIVE_NAME.sha256

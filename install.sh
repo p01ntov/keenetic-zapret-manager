@@ -107,6 +107,7 @@ is_allowed_relative() {
         share/kzm/components/S99kzm-tg-mtproto|\
         share/kzm/hardware/S50kzm-gro-fix|\
         share/kzm/hardware/090-kzm-gro-fix.sh|\
+        share/kzm/hardware/091-kzm-quic-policy.sh|\
         etc/kzapret-manager/kzm.conf|\
         etc/kzapret-manager/kzm.conf.dist|\
         etc/kzapret-manager/lists/youtube.list|\
@@ -114,7 +115,8 @@ is_allowed_relative() {
         etc/init.d/S99kzm-tg-rust|\
         etc/init.d/S99kzm-tg-mtproto|\
         etc/init.d/S50kzm-gro-fix|\
-        etc/ndm/netfilter.d/090-kzm-gro-fix.sh)
+        etc/ndm/netfilter.d/090-kzm-gro-fix.sh|\
+        etc/ndm/netfilter.d/091-kzm-quic-policy.sh)
             return 0
             ;;
         libexec/kzm/*.sh|libexec/kzm/*.awk)
@@ -663,8 +665,10 @@ done
 
 stage_file "$SCRIPT_DIR/src/share/kzm/hardware/S50kzm-gro-fix" "share/kzm/hardware/S50kzm-gro-fix" 755
 stage_file "$SCRIPT_DIR/src/share/kzm/hardware/090-kzm-gro-fix.sh" "share/kzm/hardware/090-kzm-gro-fix.sh" 755
+stage_file "$SCRIPT_DIR/src/share/kzm/hardware/091-kzm-quic-policy.sh" "share/kzm/hardware/091-kzm-quic-policy.sh" 755
 stage_file "$SCRIPT_DIR/src/share/kzm/hardware/S50kzm-gro-fix" "etc/init.d/S50kzm-gro-fix" 755
 stage_file "$SCRIPT_DIR/src/share/kzm/hardware/090-kzm-gro-fix.sh" "etc/ndm/netfilter.d/090-kzm-gro-fix.sh" 755
+stage_file "$SCRIPT_DIR/src/share/kzm/hardware/091-kzm-quic-policy.sh" "etc/ndm/netfilter.d/091-kzm-quic-policy.sh" 755
 
 # Existing user config is preserved; a fresh packaged copy is installed as .dist.
 config_target="$TARGET/etc/kzapret-manager/kzm.conf"

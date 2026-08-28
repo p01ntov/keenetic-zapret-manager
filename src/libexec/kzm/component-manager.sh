@@ -8,7 +8,7 @@ umask 077
 PATH="/opt/usr/sbin:/opt/usr/bin:/opt/sbin:/opt/bin:${PATH:-/usr/sbin:/usr/bin:/sbin:/bin}"
 export PATH
 
-KZM_VERSION="0.8.2"
+KZM_VERSION="0.8.3"
 KZM_ROOT="${KZM_ROOT:-}"
 KZM_PREFIX="${KZM_PREFIX:-/opt}"
 KZM_BASE="${KZM_BASE:-${KZM_ROOT}${KZM_PREFIX}}"
