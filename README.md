@@ -95,12 +95,12 @@ sh install.sh
 
 ```sh
 curl -fsSL \
-  https://raw.githubusercontent.com/p01ntov/keenetic-zapret-manager/v0.8.3/bootstrap.sh \
+  https://raw.githubusercontent.com/p01ntov/keenetic-zapret-manager/v0.8.4/bootstrap.sh \
   -o /tmp/kzm-bootstrap.sh && \
 sh /tmp/kzm-bootstrap.sh
 ```
 
-Bootstrap загружает закреплённый релиз `v0.8.3` во временный каталог `/tmp`,
+Bootstrap загружает закреплённый релиз `v0.8.4` во временный каталог `/tmp`,
 проверяет SHA-256 и только после этого запускает обычный `install.sh`.
 
 Установщик ставит только KZM. Он не удаляет другой движок, не запускает службы
@@ -290,7 +290,7 @@ KZM намеренно не создаёт IPv6-canary: адреса устро�
 Telegram-прокси необязательны и не заменяют Zapret. Каждый из них работает
 отдельным процессом со своим портом, конфигом и журналом:
 
-- `rust`: TG WS Proxy Rust от valnesfjord, TCP/2443; рекомендуемый вариант;
+- `rust`: TG WS Proxy Rust v2 от p01ntov, TCP/2443; рекомендуемый вариант;
 - `socks5`: TG WS Proxy SOCKS5 от d0mhate, TCP/1080; экспериментальный;
 - `mtproto`: TG WS Proxy MTProto от spatiumstas, TCP/1443;
   экспериментальный.
@@ -465,7 +465,7 @@ sh tests/integration-live.sh
   классического `nfqws` с Keenetic;
 - [Flowseal/zapret-discord-youtube](https://github.com/Flowseal/zapret-discord-youtube)
   содержит дополнительные стратегии и fake-файлы;
-- [valnesfjord/tg-ws-proxy-rs](https://github.com/valnesfjord/tg-ws-proxy-rs),
+- [p01ntov/tg-ws-proxy-rs-private](https://github.com/p01ntov/tg-ws-proxy-rs-private),
   [d0mhate/-tg-ws-proxy-Manager-go](https://github.com/d0mhate/-tg-ws-proxy-Manager-go)
   и [spatiumstas/tg-ws-proxy-go](https://github.com/spatiumstas/tg-ws-proxy-go)
   используются для необязательных Telegram-прокси.

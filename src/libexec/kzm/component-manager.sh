@@ -8,7 +8,7 @@ umask 077
 PATH="/opt/usr/sbin:/opt/usr/bin:/opt/sbin:/opt/bin:${PATH:-/usr/sbin:/usr/bin:/sbin:/bin}"
 export PATH
 
-KZM_VERSION="0.8.3"
+KZM_VERSION="0.8.4"
 KZM_ROOT="${KZM_ROOT:-}"
 KZM_PREFIX="${KZM_PREFIX:-/opt}"
 KZM_BASE="${KZM_BASE:-${KZM_ROOT}${KZM_PREFIX}}"
@@ -248,7 +248,7 @@ component_valid() {
 component_title() {
     case "$1" in
         socks5) say "TG WS Proxy SOCKS5 - by d0mhate" ;;
-        rust) say "TG WS Proxy Rust - by valnesfjord" ;;
+        rust) say "TG WS Proxy Rust v2 - by p01ntov" ;;
         mtproto) say "TG WS Proxy MTProto - by spatiumstas" ;;
         *) say "$1" ;;
     esac
@@ -734,7 +734,7 @@ release_asset_matches() {
     match_asset=$2
     case "$match_component:$match_asset" in
         socks5:tg-ws-proxy-openwrt-aarch64) return 0 ;;
-        rust:tg-ws-proxy-aarch64-unknown-linux-musl.tar.gz) return 0 ;;
+        rust:tg-ws-proxy-v2-aarch64-musl) return 0 ;;
         mtproto:tg-ws-proxy_*_entware_aarch64-3.10.ipk) return 0 ;;
         *) return 1 ;;
     esac
@@ -743,7 +743,7 @@ release_asset_matches() {
 component_repo() {
     case "$1" in
         socks5) say "d0mhate/-tg-ws-proxy-Manager-go" ;;
-        rust) say "valnesfjord/tg-ws-proxy-rs" ;;
+        rust) say "p01ntov/tg-ws-proxy-rs-private" ;;
         mtproto) say "spatiumstas/tg-ws-proxy-go" ;;
     esac
 }
@@ -829,21 +829,7 @@ extract_binary() {
             cp "$extract_archive" "$extract_target" || die "не удалось подготовить SOCKS5 binary"
             ;;
         rust)
-            if [ -z "$TAR_BIN" ] || [ ! -x "$TAR_BIN" ]; then
-                die "нужен tar"
-            fi
-            limited_list_command "$TAR_BIN" -tzf "$extract_archive" > "$TMP_DIR/archive.list" 2> "$TMP_DIR/archive.err" || die "повреждён или слишком большой tar.gz"
-            [ ! -s "$TMP_DIR/archive.err" ] || die "tar сообщил о небезопасном или нестандартном Rust archive"
-            archive_names_safe "$TMP_DIR/archive.list" || die "небезопасные пути внутри tar.gz"
-            [ "$(awk 'END { print NR+0 }' "$TMP_DIR/archive.list")" -eq 1 ] || die "неожиданное содержимое Rust tar.gz"
-            awk '$0 == "tg-ws-proxy" || $0 == "./tg-ws-proxy" { found=1 } END { exit(found ? 0 : 1) }' \
-                "$TMP_DIR/archive.list" || die "в Rust tar.gz нет ожидаемого binary"
-            mkdir -p "$TMP_DIR/rust"
-            limited_archive_command "$TAR_BIN" -xzf "$extract_archive" -C "$TMP_DIR/rust" || die "не удалось распаковать Rust tar.gz в пределах лимита"
-            if [ ! -f "$TMP_DIR/rust/tg-ws-proxy" ] || [ -L "$TMP_DIR/rust/tg-ws-proxy" ]; then
-                die "небезопасный Rust binary"
-            fi
-            cp "$TMP_DIR/rust/tg-ws-proxy" "$extract_target" || die "не удалось подготовить Rust binary"
+            cp "$extract_archive" "$extract_target" || die "не удалось подготовить Rust binary"
             ;;
         mtproto)
             if [ -z "$TAR_BIN" ] || [ ! -x "$TAR_BIN" ]; then
@@ -1220,8 +1206,9 @@ security_notice() {
             say "Из-за интерфейса upstream логин и пароль передаются аргументами процесса."
             ;;
         rust)
-            say "Рекомендуемый вариант: статический Rust binary, TLS-проверка включена."
-            say "Маршрут: DC4 напрямую; остальные Telegram DC через community Cloudflare."
+            say "Рекомендуемый вариант: статический Rust v2 binary от p01ntov, TLS-проверка включена."
+            say "Форк valnesfjord сокращает задержку холодного подключения и не меняет флаги запуска."
+            say "Маршрут: community Cloudflare первым; direct DC2/DC4 остаётся резервом."
             say "Сервис работает от nobody и ограничен 32 соединениями; upstream сообщает о возможном росте памяти."
             ;;
         mtproto)
@@ -1316,7 +1303,7 @@ install_menu() {
         if ! component_present mtproto; then mtproto_action="Установить"; elif component_install_complete mtproto; then mtproto_action="Удалить"; else mtproto_action="Завершить установку"; fi
         menu_option 1 "$zapret_action Zapret (nfqws-keenetic)"
         menu_option 2 "$socks_action TG WS Proxy SOCKS5 - d0mhate [экспериментально]"
-        menu_option 3 "$rust_action TG WS Proxy Rust - valnesfjord [рекомендуется]"
+        menu_option 3 "$rust_action TG WS Proxy Rust v2 - p01ntov [рекомендуется]"
         menu_option 4 "$mtproto_action TG WS Proxy MTProto - spatiumstas [экспериментально]"
         menu_back_option "Назад"
         printf '\n'
@@ -1355,7 +1342,7 @@ proxy_component_menu() {
         printf '%s\n\n' "$(component_title "$proxy_component")"
         printf '  Состояние: %s\n' "$(component_state_ui "$proxy_component")"
         if [ "$proxy_component" = rust ]; then
-            printf '  Маршрут: DC4 напрямую, остальные через Cloudflare\n'
+            printf '  Маршрут: Cloudflare первым, direct DC2/DC4 в резерве\n'
         fi
         printf '\n'
         menu_option 1 "Запустить и включить автозапуск"
@@ -1400,7 +1387,7 @@ proxy_menu() {
         menu_clear
         printf 'Telegram-прокси\n\n'
         menu_option 1 "TG WS Proxy SOCKS5 - $(component_state_ui socks5)"
-        menu_option 2 "TG WS Proxy Rust - $(component_state_ui rust)"
+        menu_option 2 "TG WS Proxy Rust v2 - $(component_state_ui rust)"
         menu_option 3 "TG WS Proxy MTProto - $(component_state_ui mtproto)"
         menu_back_option "Назад"
         printf '\n'

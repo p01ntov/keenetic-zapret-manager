@@ -21,9 +21,10 @@ release assets for `aarch64` Keenetic devices:
   hop disables TLS certificate verification and the current published binary
   was built with a Go toolchain affected by known vulnerabilities fixed in
   later Go releases;
-- `valnesfjord/tg-ws-proxy-rs` — the recommended MTProto implementation; TLS
-  verification is enabled and KZM runs it as `nobody`, while the upstream
-  documents possible memory growth;
+- `p01ntov/tg-ws-proxy-rs-private` — the recommended MTProto implementation,
+  a focused MIT-licensed fork of `valnesfjord/tg-ws-proxy-rs`; TLS verification
+  is enabled and KZM runs it as `nobody`, while the upstream documents possible
+  memory growth;
 - `spatiumstas/tg-ws-proxy-go` — experimental MTProto implementation; the
   current release uses an end-of-life Go toolchain and disables WSS TLS
   certificate verification.

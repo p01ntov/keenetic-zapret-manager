@@ -39,7 +39,7 @@ sh "$PROJECT_DIR/install.sh" --root "$TEST_ROOT" >/dev/null
 release_version=$(sed -n '1p' "$PROJECT_DIR/VERSION")
 component_version=$(sed -n 's/^KZM_VERSION="\([^"]*\)"$/\1/p' \
     "$PROJECT_DIR/src/libexec/kzm/component-manager.sh")
-[ "$release_version" = "0.8.3" ]
+[ "$release_version" = "0.8.4" ]
 [ "$(KZM_ROOT="$TEST_ROOT" "$TEST_ROOT/opt/bin/kzm" version)" = "$release_version" ]
 [ "$component_version" = "$release_version" ]
 [ -x "$TEST_ROOT/opt/libexec/kzm/mediatek-gro-fix.sh" ]

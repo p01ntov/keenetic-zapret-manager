@@ -254,6 +254,7 @@ if [ -n "\${KZM_TEST_LAUNCH_LOG:-}" ]; then
         printf 'TG_NO_OUTBOUND_PROXY=%s\n' "\${TG_NO_OUTBOUND_PROXY:-}"
         printf 'TG_CF_PRIORITY=%s\n' "\${TG_CF_PRIORITY:-}"
         printf 'TG_CF_BALANCE=%s\n' "\${TG_CF_BALANCE:-}"
+        printf 'TG_WS_CONNECT_TIMEOUT=%s\n' "\${TG_WS_CONNECT_TIMEOUT:-}"
         for launch_arg in "\$@"; do
             printf 'ARG=%s\n' "\$launch_arg"
         done
@@ -342,8 +343,6 @@ EOF
 }
 
 command -v base64 >/dev/null 2>&1 || fail "base64 is required for fixtures"
-base64 -d "$PROJECT_DIR/tests/fixtures/components-rust-traversal.tar.gz.b64" \
-    > "$FIXTURES/rust-traversal.tar.gz" || fail "cannot decode Rust traversal fixture"
 
 # Full GNU/bsdtar installations create the ordinary fixtures on demand. The
 # deliberately small Keenetic tar build supports only list/extract, so it uses
@@ -351,12 +350,6 @@ base64 -d "$PROJECT_DIR/tests/fixtures/components-rust-traversal.tar.gz.b64" \
 tar_create_probe="$TEST_ROOT/tar-create-probe.tar"
 if tar -cf "$tar_create_probe" -C "$FIXTURES" rust-v1.bin >/dev/null 2>&1; then
     rm -f "$tar_create_probe"
-    mkdir -p "$FIXTURES/rust-v1" "$FIXTURES/rust-v2"
-    cp "$FIXTURES/rust-v1.bin" "$FIXTURES/rust-v1/tg-ws-proxy"
-    cp "$FIXTURES/rust-v2.bin" "$FIXTURES/rust-v2/tg-ws-proxy"
-    tar -czf "$FIXTURES/rust-v1.tar.gz" -C "$FIXTURES/rust-v1" tg-ws-proxy
-    tar -czf "$FIXTURES/rust-v2.tar.gz" -C "$FIXTURES/rust-v2" tg-ws-proxy
-
     make_ipk_fixture v1 0.1.0 "$FIXTURES/mtproto-v1.bin"
     make_ipk_fixture v2 0.2.0 "$FIXTURES/mtproto-v2.bin"
     make_ipk_fixture bad-package 0.3.1 "$FIXTURES/mtproto-v2.bin" unexpected-package
@@ -440,7 +433,7 @@ variant=${MOCK_RELEASE_VARIANT:-v1}
 repo=
 case "$url" in
     */repos/d0mhate/-tg-ws-proxy-Manager-go/releases/latest) repo=socks5 ;;
-    */repos/valnesfjord/tg-ws-proxy-rs/releases/latest) repo=rust ;;
+    */repos/p01ntov/tg-ws-proxy-rs-private/releases/latest) repo=rust ;;
     */repos/spatiumstas/tg-ws-proxy-go/releases/latest) repo=mtproto ;;
 esac
 
@@ -448,10 +441,10 @@ if [ -n "$repo" ]; then
     case "$repo:$variant" in
         socks5:v1) tag=v1.0.0; name=tg-ws-proxy-openwrt-aarch64; asset="$FIXTURES/socks5-v1"; asset_url=https://mock.invalid/assets/socks5-v1 ;;
         socks5:v2|socks5:bad-sha) tag=v2.0.0; name=tg-ws-proxy-openwrt-aarch64; asset="$FIXTURES/socks5-v2"; asset_url=https://mock.invalid/assets/socks5-v2 ;;
-        rust:v1) tag=v1.0.0; name=tg-ws-proxy-aarch64-unknown-linux-musl.tar.gz; asset="$FIXTURES/rust-v1.tar.gz"; asset_url=https://mock.invalid/assets/rust-v1 ;;
-        rust:v2) tag=v2.0.0; name=tg-ws-proxy-aarch64-unknown-linux-musl.tar.gz; asset="$FIXTURES/rust-v2.tar.gz"; asset_url=https://mock.invalid/assets/rust-v2 ;;
-        rust:bad-sha) tag=v3.0.0; name=tg-ws-proxy-aarch64-unknown-linux-musl.tar.gz; asset="$FIXTURES/rust-v2.tar.gz"; asset_url=https://mock.invalid/assets/rust-v2 ;;
-        rust:traversal) tag=v9.9.9; name=tg-ws-proxy-aarch64-unknown-linux-musl.tar.gz; asset="$FIXTURES/rust-traversal.tar.gz"; asset_url=https://mock.invalid/assets/rust-traversal ;;
+        rust:v1) tag=rust-v1; name=tg-ws-proxy-v2-aarch64-musl; asset="$FIXTURES/rust-v1.bin"; asset_url=https://mock.invalid/assets/rust-v1 ;;
+        rust:v2) tag=rust-v2; name=tg-ws-proxy-v2-aarch64-musl; asset="$FIXTURES/rust-v2.bin"; asset_url=https://mock.invalid/assets/rust-v2 ;;
+        rust:bad-sha) tag=rust-v3; name=tg-ws-proxy-v2-aarch64-musl; asset="$FIXTURES/rust-v2.bin"; asset_url=https://mock.invalid/assets/rust-v2 ;;
+        rust:wrong-asset) tag=rust-v3; name=tg-ws-proxy-aarch64-unknown-linux-musl.tar.gz; asset="$FIXTURES/rust-v2.bin"; asset_url=https://mock.invalid/assets/rust-wrong ;;
         mtproto:v1) tag=0.1.0; name=tg-ws-proxy_0.1.0_entware_aarch64-3.10.ipk; asset="$FIXTURES/mtproto-v1.ipk"; asset_url=https://mock.invalid/assets/mtproto-v1 ;;
         mtproto:v2|mtproto:bad-sha) tag=0.2.0; name=tg-ws-proxy_0.2.0_entware_aarch64-3.10.ipk; asset="$FIXTURES/mtproto-v2.ipk"; asset_url=https://mock.invalid/assets/mtproto-v2 ;;
         mtproto:bad-package) tag=0.3.1; name=tg-ws-proxy_0.3.1_entware_aarch64-3.10.ipk; asset="$FIXTURES/mtproto-bad-package.ipk"; asset_url=https://mock.invalid/assets/mtproto-bad-package ;;
@@ -483,9 +476,8 @@ fi
 case "$url" in
     https://mock.invalid/assets/socks5-v1) emit_file "$FIXTURES/socks5-v1" ;;
     https://mock.invalid/assets/socks5-v2) emit_file "$FIXTURES/socks5-v2" ;;
-    https://mock.invalid/assets/rust-v1) emit_file "$FIXTURES/rust-v1.tar.gz" ;;
-    https://mock.invalid/assets/rust-v2) emit_file "$FIXTURES/rust-v2.tar.gz" ;;
-    https://mock.invalid/assets/rust-traversal) emit_file "$FIXTURES/rust-traversal.tar.gz" ;;
+    https://mock.invalid/assets/rust-v1) emit_file "$FIXTURES/rust-v1.bin" ;;
+    https://mock.invalid/assets/rust-v2) emit_file "$FIXTURES/rust-v2.bin" ;;
     https://mock.invalid/assets/mtproto-v1) emit_file "$FIXTURES/mtproto-v1.ipk" ;;
     https://mock.invalid/assets/mtproto-v2) emit_file "$FIXTURES/mtproto-v2.ipk" ;;
     https://mock.invalid/assets/mtproto-bad-package) emit_file "$FIXTURES/mtproto-bad-package.ipk" ;;
@@ -597,29 +589,30 @@ for component in socks5 rust mtproto; do
 done
 
 # The recommended Rust route is deterministic even when the caller exports
-# conflicting TG_* values: DC4 uses direct WS, while all other DCs use the
-# fetched community Cloudflare list.  Record only non-secret launch metadata.
+# conflicting TG_* values: community Cloudflare is tried first, while direct
+# DC2/DC4 remain available as fallbacks. Record only non-secret launch metadata.
 "$COMPONENT_MANAGER" stop rust >/dev/null
 : > "$LAUNCH_LOG"
 TG_DEFAULT_DOMAINS=false TG_NO_OUTBOUND_PROXY=false \
-TG_CF_PRIORITY=true TG_CF_BALANCE=true \
+TG_CF_PRIORITY=false TG_CF_BALANCE=true TG_WS_CONNECT_TIMEOUT=10 \
 KZM_TEST_WAIT_FOR_LISTENER=1 KZM_TEST_LISTENER_DELAY=6 \
     "$COMPONENT_MANAGER" start rust > "$TEST_ROOT/rust-profile-start.txt"
 grep -Fqx 'TG_DEFAULT_DOMAINS=true' "$LAUNCH_LOG" || \
     fail "Rust did not enable community Cloudflare domains"
 grep -Fqx 'TG_NO_OUTBOUND_PROXY=true' "$LAUNCH_LOG" || \
     fail "Rust inherited an outbound proxy policy"
-grep -Fqx 'TG_CF_PRIORITY=false' "$LAUNCH_LOG" || \
-    fail "Rust unexpectedly prioritised Cloudflare for DC4"
+grep -Fqx 'TG_CF_PRIORITY=true' "$LAUNCH_LOG" || \
+    fail "Rust did not prioritise Cloudflare before unstable direct DC routes"
 grep -Fqx 'TG_CF_BALANCE=false' "$LAUNCH_LOG" || \
     fail "Rust unexpectedly enabled Cloudflare balancing"
-[ "$(grep -Fxc 'ARG=--dc-ip' "$LAUNCH_LOG")" -eq 1 ] || \
-    fail "Rust must receive exactly one --dc-ip argument"
+grep -Fqx 'TG_WS_CONNECT_TIMEOUT=3' "$LAUNCH_LOG" || \
+    fail "Rust did not cap the direct WebSocket connect timeout"
+[ "$(grep -Fxc 'ARG=--dc-ip' "$LAUNCH_LOG")" -eq 2 ] || \
+    fail "Rust must receive exactly two --dc-ip arguments"
+grep -Fqx 'ARG=2:149.154.167.220' "$LAUNCH_LOG" || \
+    fail "Rust direct DC2 target is missing"
 grep -Fqx 'ARG=4:149.154.167.220' "$LAUNCH_LOG" || \
     fail "Rust direct DC4 target is missing"
-if grep -Eq '^ARG=2:' "$LAUNCH_LOG"; then
-    fail "Rust profile unexpectedly retained the implicit DC2 target"
-fi
 if grep -q 'SECRET=' "$LAUNCH_LOG"; then
     fail "Rust launch test log exposed a secret"
 fi
@@ -641,7 +634,7 @@ EOF
 assert_contains "$TEST_ROOT/rust-repair-menu.txt" 'Завершить установку TG WS Proxy Rust'
 assert_contains "$TEST_ROOT/rust-repair-menu.txt" 'Завершить установку, проверить процесс'
 assert_file "$TEST_ROOT/opt/etc/kzapret-manager/components/rust.source"
-grep -Fqx 'TAG=v1.0.0' "$TEST_ROOT/opt/etc/kzapret-manager/components/rust.source" || \
+grep -Fqx 'TAG=rust-v1' "$TEST_ROOT/opt/etc/kzapret-manager/components/rust.source" || \
     fail "repair did not restore Rust source metadata"
 
 # Entware commonly exports TMPDIR=/opt/tmp. Simulate that flash-backed path
@@ -657,6 +650,13 @@ fi
 
 # Updating replaces each binary atomically with the release whose digest was
 # advertised by the local API fixture.
+rust_source="$TEST_ROOT/opt/etc/kzapret-manager/components/rust.source"
+sed -e 's|^REPO=.*|REPO=valnesfjord/tg-ws-proxy-rs|' \
+    -e 's|^TAG=.*|TAG=v2.3.1|' \
+    -e 's|^ASSET=.*|ASSET=tg-ws-proxy-aarch64-unknown-linux-musl.tar.gz|' \
+    "$rust_source" > "$rust_source.legacy"
+mv "$rust_source.legacy" "$rust_source"
+chmod 600 "$rust_source"
 for component in socks5 rust mtproto; do
     MOCK_RELEASE_VARIANT=v2 "$COMPONENT_MANAGER" update "$component" --yes \
         > "$TEST_ROOT/update-$component.txt"
@@ -664,6 +664,10 @@ for component in socks5 rust mtproto; do
     assert_contains "$binary" "$(component_marker "$component" v2)"
     assert_mode_600 "$TEST_ROOT/opt/etc/kzapret-manager/components/$component.conf"
 done
+grep -Fqx 'REPO=p01ntov/tg-ws-proxy-rs-private' "$rust_source" || \
+    fail "Rust update did not migrate legacy source metadata"
+grep -Fqx 'TAG=rust-v2' "$rust_source" || \
+    fail "Rust update did not record the private fork release tag"
 
 # Digest failures are fail-closed: the installed executable is not touched.
 rust_binary=$(component_binary rust)
@@ -680,14 +684,15 @@ if find "$flash_tmp" -maxdepth 1 -name 'kzm-components.*' -print | grep -q .; th
     fail "rejected component update leaked a work directory into simulated /opt/tmp"
 fi
 
-# Archive members containing '..' must be rejected before extraction and must
-# leave the old executable intact.
-if MOCK_RELEASE_VARIANT=traversal "$COMPONENT_MANAGER" update rust --yes \
-    > "$TEST_ROOT/rust-traversal.txt" 2>&1; then
-    fail "Rust tar path traversal was accepted"
+# The Rust source publishes a direct ELF with a narrowly matched asset name.
+# An old or unrelated archive name must be rejected before download.
+if MOCK_RELEASE_VARIANT=wrong-asset "$COMPONENT_MANAGER" update rust --yes \
+    > "$TEST_ROOT/rust-wrong-asset.txt" 2>&1; then
+    fail "an unexpected Rust asset name was accepted"
 fi
+assert_contains "$TEST_ROOT/rust-wrong-asset.txt" 'нет подходящего asset'
 [ "$(sha256_file "$rust_binary")" = "$rust_before" ] || \
-    fail "rejected Rust archive changed the installed binary"
+    fail "rejected Rust asset changed the installed binary"
 
 mtproto_binary=$(component_binary mtproto)
 mtproto_before=$(sha256_file "$mtproto_binary")

@@ -74,6 +74,7 @@ SECRET=
 POOL_SIZE=
 MAX_CONNECTIONS=
 DC_IP_DEFAULT=
+RUST_DIRECT_DC2=2:149.154.167.220
 RUST_DIRECT_DC4=4:149.154.167.220
 
 allow_test_artifacts() {
@@ -924,12 +925,15 @@ launch_test_service() {
             TG_MAX_CONNECTIONS="$MAX_CONNECTIONS" \
             TG_NO_OUTBOUND_PROXY=true \
             TG_DEFAULT_DOMAINS=true \
-            TG_CF_PRIORITY=false \
+            TG_CF_PRIORITY=true \
             TG_CF_BALANCE=false \
+            TG_WS_CONNECT_TIMEOUT=3 \
             TG_SKIP_TLS_VERIFY=false \
             TG_QUIET=true \
             RUST_LOG=warn \
-                nohup "$BINARY" --dc-ip "$RUST_DIRECT_DC4" \
+                nohup "$BINARY" \
+                    --dc-ip "$RUST_DIRECT_DC2" \
+                    --dc-ip "$RUST_DIRECT_DC4" \
                     </dev/null >/dev/null 2>&1 &
             ;;
         mtproto)
@@ -986,12 +990,15 @@ launch_production_service() {
                     "TG_MAX_CONNECTIONS=$MAX_CONNECTIONS" \
                     TG_NO_OUTBOUND_PROXY=true \
                     TG_DEFAULT_DOMAINS=true \
-                    TG_CF_PRIORITY=false \
+                    TG_CF_PRIORITY=true \
                     TG_CF_BALANCE=false \
+                    TG_WS_CONNECT_TIMEOUT=3 \
                     TG_SKIP_TLS_VERIFY=false \
                     TG_QUIET=true \
                     RUST_LOG=warn \
-                    "$BINARY" --dc-ip "$RUST_DIRECT_DC4" \
+                    "$BINARY" \
+                    --dc-ip "$RUST_DIRECT_DC2" \
+                    --dc-ip "$RUST_DIRECT_DC4" \
                     </dev/null >/dev/null 2>&1; then
                 fail_after_launch "BusyBox start-stop-daemon не смог запустить rust"
             fi
