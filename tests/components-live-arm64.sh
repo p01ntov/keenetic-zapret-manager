@@ -148,8 +148,9 @@ rust_pool=$(config_value POOL_SIZE "$rust_config")
 rust_max=$(config_value MAX_CONNECTIONS "$rust_config")
 TG_HOST="$rust_host" TG_LINK_IP="$rust_host" TG_PORT="$rust_port" \
 TG_SECRET="$rust_secret" TG_POOL_SIZE="$rust_pool" TG_MAX_CONNECTIONS="$rust_max" \
-TG_NO_OUTBOUND_PROXY=true TG_DEFAULT_DOMAINS=true TG_CF_PRIORITY=true \
-TG_CF_BALANCE=false TG_WS_CONNECT_TIMEOUT=3 TG_SKIP_TLS_VERIFY=false \
+TG_NO_OUTBOUND_PROXY=true TG_DEFAULT_DOMAINS=false \
+TG_CF_DOMAIN=stopblocking.co.uk,kartoshka.co.uk,nebally.co.uk,pyatdesyatdva.co.uk,noskomnadzor.co.uk,sorokdva.co.uk,pyatdesyatodin.co.uk \
+TG_CF_PRIORITY=true TG_CF_BALANCE=true TG_WS_CONNECT_TIMEOUT=3 TG_SKIP_TLS_VERIFY=false \
 TG_QUIET=true RUST_LOG=warn \
     "$LIVE_ROOT/opt/usr/bin/kzm-tg-rust" \
         --dc-ip 2:149.154.167.220 --dc-ip 4:149.154.167.220 \

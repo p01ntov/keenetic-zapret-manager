@@ -251,6 +251,7 @@ if [ -n "\${KZM_TEST_LAUNCH_LOG:-}" ]; then
     {
         printf 'TG_PORT=%s\n' "\${TG_PORT:-}"
         printf 'TG_DEFAULT_DOMAINS=%s\n' "\${TG_DEFAULT_DOMAINS:-}"
+        printf 'TG_CF_DOMAIN=%s\n' "\${TG_CF_DOMAIN:-}"
         printf 'TG_NO_OUTBOUND_PROXY=%s\n' "\${TG_NO_OUTBOUND_PROXY:-}"
         printf 'TG_CF_PRIORITY=%s\n' "\${TG_CF_PRIORITY:-}"
         printf 'TG_CF_BALANCE=%s\n' "\${TG_CF_BALANCE:-}"
@@ -593,18 +594,20 @@ done
 # DC2/DC4 remain available as fallbacks. Record only non-secret launch metadata.
 "$COMPONENT_MANAGER" stop rust >/dev/null
 : > "$LAUNCH_LOG"
-TG_DEFAULT_DOMAINS=false TG_NO_OUTBOUND_PROXY=false \
-TG_CF_PRIORITY=false TG_CF_BALANCE=true TG_WS_CONNECT_TIMEOUT=10 \
+TG_DEFAULT_DOMAINS=true TG_CF_DOMAIN=broken.invalid TG_NO_OUTBOUND_PROXY=false \
+TG_CF_PRIORITY=false TG_CF_BALANCE=false TG_WS_CONNECT_TIMEOUT=10 \
 KZM_TEST_WAIT_FOR_LISTENER=1 KZM_TEST_LISTENER_DELAY=6 \
     "$COMPONENT_MANAGER" start rust > "$TEST_ROOT/rust-profile-start.txt"
-grep -Fqx 'TG_DEFAULT_DOMAINS=true' "$LAUNCH_LOG" || \
-    fail "Rust did not enable community Cloudflare domains"
+grep -Fqx 'TG_DEFAULT_DOMAINS=false' "$LAUNCH_LOG" || \
+    fail "Rust unexpectedly retained the mutable community Cloudflare list"
+grep -Fqx 'TG_CF_DOMAIN=stopblocking.co.uk,kartoshka.co.uk,nebally.co.uk,pyatdesyatdva.co.uk,noskomnadzor.co.uk,sorokdva.co.uk,pyatdesyatodin.co.uk' "$LAUNCH_LOG" || \
+    fail "Rust did not use the verified Cloudflare shortlist"
 grep -Fqx 'TG_NO_OUTBOUND_PROXY=true' "$LAUNCH_LOG" || \
     fail "Rust inherited an outbound proxy policy"
 grep -Fqx 'TG_CF_PRIORITY=true' "$LAUNCH_LOG" || \
     fail "Rust did not prioritise Cloudflare before unstable direct DC routes"
-grep -Fqx 'TG_CF_BALANCE=false' "$LAUNCH_LOG" || \
-    fail "Rust unexpectedly enabled Cloudflare balancing"
+grep -Fqx 'TG_CF_BALANCE=true' "$LAUNCH_LOG" || \
+    fail "Rust did not balance media connections across the Cloudflare shortlist"
 grep -Fqx 'TG_WS_CONNECT_TIMEOUT=3' "$LAUNCH_LOG" || \
     fail "Rust did not cap the direct WebSocket connect timeout"
 [ "$(grep -Fxc 'ARG=--dc-ip' "$LAUNCH_LOG")" -eq 2 ] || \

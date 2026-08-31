@@ -76,6 +76,7 @@ MAX_CONNECTIONS=
 DC_IP_DEFAULT=
 RUST_DIRECT_DC2=2:149.154.167.220
 RUST_DIRECT_DC4=4:149.154.167.220
+RUST_CF_DOMAINS=stopblocking.co.uk,kartoshka.co.uk,nebally.co.uk,pyatdesyatdva.co.uk,noskomnadzor.co.uk,sorokdva.co.uk,pyatdesyatodin.co.uk
 
 allow_test_artifacts() {
     [ "$KZM_TEST_MODE" -eq 1 ]
@@ -924,9 +925,10 @@ launch_test_service() {
             TG_POOL_SIZE="$POOL_SIZE" \
             TG_MAX_CONNECTIONS="$MAX_CONNECTIONS" \
             TG_NO_OUTBOUND_PROXY=true \
-            TG_DEFAULT_DOMAINS=true \
+            TG_DEFAULT_DOMAINS=false \
+            TG_CF_DOMAIN="$RUST_CF_DOMAINS" \
             TG_CF_PRIORITY=true \
-            TG_CF_BALANCE=false \
+            TG_CF_BALANCE=true \
             TG_WS_CONNECT_TIMEOUT=3 \
             TG_SKIP_TLS_VERIFY=false \
             TG_QUIET=true \
@@ -989,9 +991,10 @@ launch_production_service() {
                     "TG_POOL_SIZE=$POOL_SIZE" \
                     "TG_MAX_CONNECTIONS=$MAX_CONNECTIONS" \
                     TG_NO_OUTBOUND_PROXY=true \
-                    TG_DEFAULT_DOMAINS=true \
+                    TG_DEFAULT_DOMAINS=false \
+                    "TG_CF_DOMAIN=$RUST_CF_DOMAINS" \
                     TG_CF_PRIORITY=true \
-                    TG_CF_BALANCE=false \
+                    TG_CF_BALANCE=true \
                     TG_WS_CONNECT_TIMEOUT=3 \
                     TG_SKIP_TLS_VERIFY=false \
                     TG_QUIET=true \

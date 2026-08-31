@@ -1208,7 +1208,7 @@ security_notice() {
         rust)
             say "Рекомендуемый вариант: статический Rust v2 binary от p01ntov, TLS-проверка включена."
             say "Форк valnesfjord сокращает задержку холодного подключения и не меняет флаги запуска."
-            say "Маршрут: community Cloudflare первым; direct DC2/DC4 остаётся резервом."
+            say "Маршрут: проверенный Cloudflare shortlist с балансировкой; direct DC2/DC4 в резерве."
             say "Сервис работает от nobody и ограничен 32 соединениями; upstream сообщает о возможном росте памяти."
             ;;
         mtproto)
@@ -1342,7 +1342,7 @@ proxy_component_menu() {
         printf '%s\n\n' "$(component_title "$proxy_component")"
         printf '  Состояние: %s\n' "$(component_state_ui "$proxy_component")"
         if [ "$proxy_component" = rust ]; then
-            printf '  Маршрут: Cloudflare первым, direct DC2/DC4 в резерве\n'
+            printf '  Маршрут: Cloudflare shortlist с балансировкой, direct DC2/DC4 в резерве\n'
         fi
         printf '\n'
         menu_option 1 "Запустить и включить автозапуск"
