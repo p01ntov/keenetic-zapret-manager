@@ -2272,6 +2272,7 @@ run_canary_suite_test() {
         STRATEGY_INDEX="$KZM_TMP/strategy-index.tsv" \
         TARGET_FILE="$test_targets_file" \
         RESULT_FILE="$result_next" \
+        DIAGNOSTIC_FILE="$LAST_TEST_RESULT.log" \
         TEST_LOCAL_IP="$test_local_ip" \
         QUEUE_NUM="$CANARY_QUEUE_NUM" \
         PARALLEL=8 \

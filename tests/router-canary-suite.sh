@@ -20,6 +20,7 @@ CANARY_TTL=${CANARY_TTL:-120}
 CURL_BIN=${CURL_BIN:-$(command -v curl 2>/dev/null || true)}
 CANARY_STATE_FILE=${CANARY_STATE_FILE:-/tmp/kzm-router-canary.state}
 CANARY_FIREWALL_CHAIN=${CANARY_FIREWALL_CHAIN:-KZM_CANARY}
+DIAGNOSTIC_FILE=${DIAGNOSTIC_FILE:-$RESULT_FILE.log}
 
 say() {
     printf '%s\n' "$*"
@@ -91,13 +92,15 @@ SUITE_TMP=
 
 stop_own_canary() {
     if [ "$CANARY_STARTED" -eq 1 ]; then
-        "$CANARY_SCRIPT" stop >/dev/null 2>&1 || true
+        if ! "$CANARY_SCRIPT" stop >> "$DIAGNOSTIC_FILE" 2>&1; then
+            return 1
+        fi
         CANARY_STARTED=0
     fi
 }
 
 cleanup_suite() {
-    stop_own_canary
+    stop_own_canary || true
     if [ -n "$SUITE_TMP" ]; then
         case "$SUITE_TMP" in
             /tmp/kzm-suite.*) rm -rf "$SUITE_TMP" ;;
@@ -191,7 +194,7 @@ run_strategy() {
     strategy_total=$5
     strategy_kind=$6
 
-    stop_own_canary
+    stop_own_canary || die "canary cleanup failed; see $DIAGNOSTIC_FILE"
     if [ "$strategy_kind" = control ]; then
         say "Контрольный тест: без обхода"
     else
@@ -209,11 +212,18 @@ run_strategy() {
         QUEUE_NUM="$QUEUE_NUM" \
         TTL="$CANARY_TTL" \
         "$CANARY_SCRIPT" start > "$SUITE_TMP/canary-start.log" 2>&1; then
+        {
+            printf '\n[%s] %s (%s)\n' "$(date -u)" "$strategy_label" "$strategy_id"
+            cat "$SUITE_TMP/canary-start.log"
+        } >> "$DIAGNOSTIC_FILE"
+        tail -n 12 "$SUITE_TMP/canary-start.log" >&2
+        say "Диагностика запуска: $DIAGNOSTIC_FILE"
         if [ "$strategy_kind" = control ]; then
             die "cannot start the isolated control queue"
         fi
         say "[ERROR] временная очередь не запустилась; стратегия пропущена"
         write_start_failure_rows "$strategy_id" "$strategy_label"
+        [ ! -e "$CANARY_STATE_FILE" ] || die "failed canary retained state; stop the test and inspect diagnostics"
         return 0
     fi
     CANARY_STARTED=1
@@ -243,7 +253,7 @@ run_strategy() {
             "$strategy_id" "$strategy_label" "$row_target" "$row_ok" "$row_rc" \
             "$row_http" "$row_bytes" "$row_seconds" "$strategy_packets" >> "$RESULT_FILE"
     done < "$SUITE_TMP/strategy.rows"
-    stop_own_canary
+    stop_own_canary || die "canary cleanup failed; see $DIAGNOSTIC_FILE"
 
     if [ "$strategy_packets" -eq 0 ]; then
         say "[WARN] очередь 301 не увидела пакетов; результат этой строки нельзя использовать для выбора"
@@ -251,6 +261,7 @@ run_strategy() {
 }
 
 validate_inputs
+: > "$DIAGNOSTIC_FILE" || die "cannot create diagnostic log"
 SUITE_TMP=$(mktemp -d "${TMPDIR:-/tmp}/kzm-suite.XXXXXX") || die "cannot create temporary directory"
 trap cleanup_suite EXIT HUP INT TERM
 
