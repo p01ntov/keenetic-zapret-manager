@@ -848,6 +848,7 @@ render_discord_voice_strategy() {
         [ -s "$discord_fake_path" ] || die "нет fake-файла $DISCORD_FAKE; выполните: kzm update или выберите fake заново"
     fi
     awk -v fake_path="$discord_fake_path" '
+        /^--filter-udp=/ { sub(/50000-50100/, "50000-65535"); sub(/50000:50100/, "50000:65535") }
         /^--dpi-desync-fake-(discord|stun)=/ { next }
         { print }
         END {
