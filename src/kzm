@@ -2898,7 +2898,7 @@ youtube_live_test_menu() {
         case "$youtube_live_choice" in
             1) menu_execute start_youtube_tcp_test_interactive ;;
             2) menu_execute start_live_test_interactive quic ;;
-            s|S) if menu_save_and_exit; then return; else menu_pause; fi ;;
+            s|S|ы|Ы) if menu_save_and_exit; then return; else menu_pause; fi ;;
             0|'') if menu_back_to_main; then return; else menu_pause; fi ;;
             *) say "Введите номер из списка."; menu_pause ;;
         esac
@@ -3196,7 +3196,7 @@ quic_mode_menu() {
             1) menu_execute select_quic_mode bypass ;;
             2) menu_execute select_quic_mode block ;;
             3) menu_execute select_quic_mode off ;;
-            s|S) if menu_save_and_exit; then return; else menu_pause; fi ;;
+            s|S|ы|Ы) if menu_save_and_exit; then return; else menu_pause; fi ;;
             0|'') if menu_back_to_main; then return; else menu_pause; fi ;;
             *) say "Неизвестный пункт."; menu_pause ;;
         esac
@@ -3248,7 +3248,7 @@ discord_menu() {
             7) menu_execute choose_discord_media_interactive ;;
             8) menu_execute choose_discord_fake_interactive ;;
             9) menu_execute toggle_discord_interactive ;;
-            s|S) if menu_save_and_exit; then return; else menu_pause; fi ;;
+            s|S|ы|Ы) if menu_save_and_exit; then return; else menu_pause; fi ;;
             0|'') if menu_back_to_main; then return; else menu_pause; fi ;;
             *) say "Неизвестный пункт."; menu_pause ;;
         esac
@@ -3272,7 +3272,7 @@ scope_menu() {
             1) menu_execute select_scope list ;;
             2) menu_execute select_scope auto ;;
             3) menu_execute select_scope all ;;
-            s|S) if menu_save_and_exit; then return; else menu_pause; fi ;;
+            s|S|ы|Ы) if menu_save_and_exit; then return; else menu_pause; fi ;;
             0|'') if menu_back_to_main; then return; else menu_pause; fi ;;
             *) say "Неизвестный пункт."; menu_pause ;;
         esac
@@ -3311,7 +3311,7 @@ strategies_menu() {
             4) quic_mode_menu ;;
             5) menu_execute toggle_game_interactive ;;
             6) scope_menu ;;
-            s|S) if menu_save_and_exit; then return; else menu_pause; fi ;;
+            s|S|ы|Ы) if menu_save_and_exit; then return; else menu_pause; fi ;;
             0|'') if menu_back_to_main; then return; else menu_pause; fi ;;
             *) say "Неизвестный пункт."; menu_pause ;;
         esac
@@ -3378,7 +3378,7 @@ canary_menu() {
             8) [ -s "$LAST_TEST_RESULT" ] && menu_execute show_strategy_test_results "$LAST_TEST_RESULT" ;;
             9) [ -s "$LAST_TEST_RESULT" ] && menu_execute delete_test_results_interactive ;;
             10) [ -s /tmp/kzm-router-canary.state ] && menu_execute stop_live_test_interactive ;;
-            s|S) if menu_save_and_exit; then return; else menu_pause; fi ;;
+            s|S|ы|Ы) if menu_save_and_exit; then return; else menu_pause; fi ;;
             0|'') if menu_back_to_main; then return; else menu_pause; fi ;;
             *) say "Неизвестный пункт."; menu_pause ;;
         esac
@@ -3477,7 +3477,7 @@ target_menu() {
             3) menu_execute network_add_interactive ;;
             4) menu_execute target_remove_interactive ;;
             5) scope_menu ;;
-            s|S) if menu_save_and_exit; then return; else menu_pause; fi ;;
+            s|S|ы|Ы) if menu_save_and_exit; then return; else menu_pause; fi ;;
             0|'') if menu_back_to_main; then return; else menu_pause; fi ;;
             *) say "Неизвестный пункт."; menu_pause ;;
         esac
@@ -3543,7 +3543,7 @@ backup_menu() {
             1) menu_execute show_backups_interactive ;;
             2) menu_execute create_backup ;;
             3) menu_execute restore_backup_interactive ;;
-            s|S) if menu_save_and_exit; then return; else menu_pause; fi ;;
+            s|S|ы|Ы) if menu_save_and_exit; then return; else menu_pause; fi ;;
             0|'') if menu_back_to_main; then return; else menu_pause; fi ;;
             *) say "Неизвестный пункт."; menu_pause ;;
         esac
@@ -3606,7 +3606,7 @@ advanced_menu() {
             6) menu_execute cleanup_auto_interactive ;;
             7) menu_execute doctor_command ;;
             8) menu_execute usage ;;
-            s|S) if menu_save_and_exit; then return; else menu_pause; fi ;;
+            s|S|ы|Ы) if menu_save_and_exit; then return; else menu_pause; fi ;;
             0|'') if menu_back_to_main; then return; else menu_pause; fi ;;
             *) say "Неизвестный пункт."; menu_pause ;;
         esac
@@ -3649,7 +3649,7 @@ interactive_menu() {
             5) menu_execute apply_interactive ;;
             6) menu_execute status_command ;;
             7) advanced_menu ;;
-            s|S) if menu_save_and_exit; then return; else menu_pause; fi ;;
+            s|S|ы|Ы) if menu_save_and_exit; then return; else menu_pause; fi ;;
             0|'') if menu_back_to_main; then return; else menu_pause; fi ;;
             *) say "Неизвестный пункт."; menu_pause ;;
         esac
