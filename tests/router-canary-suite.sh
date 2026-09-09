@@ -21,6 +21,7 @@ CURL_BIN=${CURL_BIN:-$(command -v curl 2>/dev/null || true)}
 CANARY_STATE_FILE=${CANARY_STATE_FILE:-/tmp/kzm-router-canary.state}
 CANARY_FIREWALL_CHAIN=${CANARY_FIREWALL_CHAIN:-KZM_CANARY}
 DIAGNOSTIC_FILE=${DIAGNOSTIC_FILE:-$RESULT_FILE.log}
+SUITE_LOCK_DIR=${SUITE_LOCK_DIR:-/tmp/kzm-router-canary-suite.lock}
 
 say() {
     printf '%s\n' "$*"
@@ -262,8 +263,12 @@ run_strategy() {
 
 validate_inputs
 : > "$DIAGNOSTIC_FILE" || die "cannot create diagnostic log"
+if ! mkdir "$SUITE_LOCK_DIR" 2>/dev/null; then
+    die "another strategy test is already running; stop it before starting a new one"
+fi
+trap 'cleanup_suite; rmdir "$SUITE_LOCK_DIR" 2>/dev/null || true' EXIT HUP INT TERM
 SUITE_TMP=$(mktemp -d "${TMPDIR:-/tmp}/kzm-suite.XXXXXX") || die "cannot create temporary directory"
-trap cleanup_suite EXIT HUP INT TERM
+trap 'cleanup_suite; rmdir "$SUITE_LOCK_DIR" 2>/dev/null || true' EXIT HUP INT TERM
 
 TARGET_COUNT=$(awk 'END { print NR+0 }' "$TARGET_FILE")
 STRATEGY_COUNT=$(awk 'END { print NR+0 }' "$STRATEGY_INDEX")
