@@ -406,6 +406,7 @@ update_exclude_list() {
     ' "$exclude_tmp" > "$exclude_tmp.clean"
     [ -s "$exclude_tmp.clean" ] || return 1
     cp "$exclude_tmp.clean" "$EXCLUDE_LIST.next.$$" || return 1
+    chmod 644 "$EXCLUDE_LIST.next.$$" || return 1
     mv "$EXCLUDE_LIST.next.$$" "$EXCLUDE_LIST"
 }
 
@@ -423,6 +424,9 @@ replace_catalog_dir() {
     rm -rf "$replace_next" "$replace_old"
     mkdir -p "$replace_next" || die "не удалось подготовить каталог $replace_name"
     cp -R "$replace_source"/. "$replace_next"/ || die "не удалось скопировать каталог $replace_name"
+    # Downloads use umask 077, while nfqws drops privileges to nobody.
+    find "$replace_next" -type d -exec chmod 755 {} + 2>/dev/null || die "не удалось открыть каталог $replace_name"
+    find "$replace_next" -type f -exec chmod 644 {} + 2>/dev/null || die "не удалось открыть файлы каталога $replace_name"
     if [ -d "$replace_target" ]; then
         mv "$replace_target" "$replace_old" || die "не удалось зарезервировать каталог $replace_name"
     fi
@@ -469,6 +473,7 @@ update_test_targets() {
         return 1
     }
     cp "$test_targets_next.clean" "$TEST_TARGETS.next.$$" || return 1
+    chmod 644 "$TEST_TARGETS.next.$$" || return 1
     mv "$TEST_TARGETS.next.$$" "$TEST_TARGETS" || return 1
     say "Обновлён список тестов Zapret Manager/Hyperion: $test_target_count целей."
 }
