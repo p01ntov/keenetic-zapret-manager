@@ -95,12 +95,12 @@ sh install.sh
 
 ```sh
 curl -fsSL \
-  https://raw.githubusercontent.com/p01ntov/keenetic-zapret-manager/v0.8.4/bootstrap.sh \
+  https://raw.githubusercontent.com/p01ntov/keenetic-zapret-manager/v0.8.5/bootstrap.sh \
   -o /tmp/kzm-bootstrap.sh && \
 sh /tmp/kzm-bootstrap.sh
 ```
 
-Bootstrap загружает закреплённый релиз `v0.8.4` во временный каталог `/tmp`,
+Bootstrap загружает закреплённый релиз `v0.8.5` во временный каталог `/tmp`,
 проверяет SHA-256 и только после этого запускает обычный `install.sh`.
 
 Установщик ставит только KZM. Он не удаляет другой движок, не запускает службы
